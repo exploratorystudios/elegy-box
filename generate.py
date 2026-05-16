@@ -2424,7 +2424,7 @@ def main():
 
     # Motif heuristic state
     MOTIF_BARS    = 2       # collect pitch classes from first N bars of first A section
-    ANCHOR_BARS   = 2       # opening bars pinned permanently in BarEncoder memory (≤ MAX_HISTORY)
+    ANCHOR_BARS   = 4       # opening bars pinned permanently in BarEncoder memory (≤ MAX_HISTORY)
     motif_pitches = []      # raw pitches gathered during first A block
     motif_bias    = None    # built once we leave the first A section
     first_a_done  = False   # True after first A block ends
