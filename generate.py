@@ -1584,13 +1584,15 @@ def _smooth_melody_leaps(bar_events_list, bass_split=58, max_leap=7, section_lab
 
             if prev_top is not None:
                 leap = abs(top_pitch - prev_top)
-                if leap > max_leap:
+                leap_pc = leap % 12
+                # Smooth both large leaps AND tritone intervals at any distance
+                if leap > max_leap or leap_pc == 6:
                     best_pitch, best_leap = top_pitch, leap
                     for delta in (-12, 12, -24, 24):
                         cand = top_pitch + delta
                         if MELODY_LO <= cand <= MELODY_HI:
                             cand_leap = abs(cand - prev_top)
-                            if cand_leap < best_leap:
+                            if cand_leap < best_leap and cand_leap % 12 != 6:
                                 best_leap, best_pitch = cand_leap, cand
                     if best_pitch != top_pitch:
                         p_, _, d_, v_ = result[bar_idx][top_idx]
@@ -1599,6 +1601,75 @@ def _smooth_melody_leaps(bar_events_list, bass_split=58, max_leap=7, section_lab
 
             prev_top = top_pitch
 
+    return result
+
+
+def _smooth_intra_bar_leaps(bar_events_list, diatonic_pcs, bass_split=58):
+    """
+    Within each bar, smooth harsh melodic intervals (tritone=6, M7=11, m2=1)
+    between consecutive top-voice positions by octave-displacing the incoming note.
+    Non-diatonic notes that cannot be resolved by displacement are removed entirely.
+    Diatonic-to-diatonic harsh intervals are left alone — they are intentional color.
+    """
+    MELODY_LO = bass_split
+    MELODY_HI = 91
+
+    def _harsh(a, b):
+        return (abs(a - b) % 12) in {1, 6, 11}
+
+    result = []
+    for events in bar_events_list:
+        if not events:
+            result.append(events)
+            continue
+
+        # Index treble notes by position; track the top note at each position
+        by_pos = {}
+        for idx, (pos, p, d, v) in enumerate(events):
+            if p >= bass_split:
+                by_pos.setdefault(pos, []).append(idx)
+
+        remove = set()
+        modified = {}   # idx → new pitch
+
+        prev_top = None
+        for pos in sorted(by_pos):
+            indices = by_pos[pos]
+            top_idx = max(indices, key=lambda k: events[k][1])
+            top_pitch = events[top_idx][1]
+
+            if prev_top is not None and _harsh(top_pitch, prev_top):
+                # Try octave displacement to relieve the harsh interval
+                best_pitch = top_pitch
+                best_dist = abs(top_pitch - prev_top)
+                for delta in (-12, 12, -24, 24):
+                    cand = top_pitch + delta
+                    if MELODY_LO <= cand <= MELODY_HI and not _harsh(cand, prev_top):
+                        dist = abs(cand - prev_top)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_pitch = cand
+
+                if best_pitch != top_pitch:
+                    modified[top_idx] = best_pitch
+                    top_pitch = best_pitch
+                elif diatonic_pcs and (top_pitch % 12) not in diatonic_pcs:
+                    # Can't fix via displacement and the note is non-diatonic → drop it
+                    remove.add(top_idx)
+                    continue   # don't update prev_top — next note checked against same ref
+
+            prev_top = top_pitch
+
+        new_bar = []
+        for idx, ev in enumerate(events):
+            if idx in remove:
+                continue
+            if idx in modified:
+                pos_, _, d_, v_ = ev
+                new_bar.append((pos_, modified[idx], d_, v_))
+            else:
+                new_bar.append(ev)
+        result.append(new_bar)
     return result
 
 
@@ -1843,7 +1914,7 @@ def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, bass_split=58):
     if not diatonic_pcs:
         return bar_events_list
 
-    HARSH = {1, 2, 6, 10, 11}
+    HARSH = {1, 6, 11}   # m2, tritone, M7 — actual dissonances; M2/m7 omitted
 
     def dissonance_score(pc, other_pcs):
         return sum(1 for o in other_pcs if (abs(pc - o) % 12) in HARSH)
@@ -2608,6 +2679,11 @@ def main():
         # safeguard that fires every phrase_bars bars regardless of form.
         if i > 0 and args.phrase_bars > 1 and (i % args.phrase_bars == 0):
             prev_bar_tokens = None
+        # Bar-1 reset: bar 0's strong pattern can echo into bar 1 via prev_bar_tokens,
+        # making the opening two bars identical. Clearing at i=1 breaks this chain
+        # without affecting the BarEncoder's structural memory.
+        if i == 1:
+            prev_bar_tokens = None
 
         prev   = chords[i - 1] if i > 0 else None
         prefix = chord_prefix(prev, curr, prev_bar_tokens)
@@ -2728,10 +2804,16 @@ def main():
         if getattr(args, 'debug_stages', False):
             bars_to_midi(bar_events_list, bpm=args.bpm).save(args.output + '.stage2_polish.mid')
 
-        # ── Melody smoothing ──────────────────────────────────────────────
+        # ── Melody smoothing (cross-bar leaps + tritones) ────────────────
         bar_events_list = _smooth_melody_leaps(
             bar_events_list, bass_split=args.lh_bass_split,
             section_labels=section_labels)
+
+        # ── Intra-bar melodic smoothing (within-bar harsh intervals) ─────
+        if diatonic_roots is not None:
+            bar_events_list = _smooth_intra_bar_leaps(
+                bar_events_list, diatonic_roots, bass_split=args.lh_bass_split)
+
         if getattr(args, 'debug_stages', False):
             bars_to_midi(bar_events_list, bpm=args.bpm).save(args.output + '.stage3_smooth.mid')
 
