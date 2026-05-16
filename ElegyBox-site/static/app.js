@@ -37,22 +37,23 @@ const PRESETS = [
   { name: 'Binary (AB)',    category: 'Structured',
     description: 'Two contrasting halves — grounded A section, freer B section.',
     params: { n_bars:32, bpm:100, chord_temp:0.95, note_temp:0.95, form:'binary', max_chord_notes:5, max_repeat:3, b_note_temp:1.1,
-              dur_bias:0.2 } },
+              dur_bias:0.2, motif_strength:0.5 } },
   { name: 'ABA',            category: 'Structured',
     description: 'Theme — contrast — return. The backbone of classical form.',
     params: { n_bars:48, bpm:96,  chord_temp:0.9,  note_temp:0.95, form:'aba',    max_chord_notes:5, max_repeat:3, b_note_temp:1.1,
-              dur_bias:0.2, melody_strength:0.3 } },
+              dur_bias:0.2, melody_strength:0.3, motif_strength:0.5 } },
   { name: 'Rondo',          category: 'Structured',
     description: 'ABACABA — a recurring refrain between two contrasting episodes.',
-    params: { n_bars:56, bpm:104, chord_temp:1.0,  note_temp:0.95, form:'rondo',  max_chord_notes:5, max_repeat:2, b_note_temp:1.1 } },
+    params: { n_bars:56, bpm:104, chord_temp:1.0,  note_temp:0.95, form:'rondo',  max_chord_notes:5, max_repeat:2, b_note_temp:1.1,
+              motif_strength:0.5 } },
   { name: 'Arch (ABCBA)',   category: 'Structured',
     description: 'Builds through B to a climactic C, then mirrors back to the opening.',
     params: { n_bars:50, bpm:96,  chord_temp:0.9,  note_temp:0.9,  form:'arch',   max_chord_notes:5, max_repeat:3, b_note_temp:1.05,
-              dur_bias:0.2, melody_strength:0.3 } },
+              dur_bias:0.2, melody_strength:0.3, motif_strength:0.5 } },
   { name: 'Variations',     category: 'Structured',
     description: 'Three passes over the same chords — each variation denser and freer.',
     params: { n_bars:48, bpm:96,  chord_temp:0.9,  note_temp:0.9,  form:'variation', max_chord_notes:5, max_repeat:3,
-              dur_bias:0.2 } },
+              dur_bias:0.2, motif_strength:0.5 } },
 
   // ── Character ───────────────────────────────────────────────────────────
   { name: 'Nocturne',       category: 'Character',
@@ -161,7 +162,6 @@ const $ = id => document.getElementById(id);
 const presetSelect    = $('presetSelect');
 const presetDescEl    = $('presetDescDisplay');
 const generateBtn     = $('generateBtn');
-const noBiasCheck     = $('noBiasCheck');
 const generationLog   = $('generationLog');
 const logStatus       = $('logStatus');
 const logSpinner      = $('logSpinner');
@@ -541,7 +541,6 @@ generateBtn.addEventListener('click', async () => {
       const customBpm = parseInt(bpmDisplay.value, 10);
       if (customBpm >= 20 && customBpm <= 300) params.bpm = customBpm;
     }
-    if (noBiasCheck.checked) params.no_bias = true;
     const res = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

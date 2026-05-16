@@ -2392,6 +2392,7 @@ def main():
     prev_bar_tokens  = None
     prev_bar_section = None
     bar_history      = []   # completed bar token lists for cross-attention
+    anchor_history   = []   # first MOTIF_BARS bars — always pinned at front of memory
 
     # Seed BarEncoder memory from an external MIDI file so the model generates
     # with that piece's style already in its cross-attention context.
@@ -2543,13 +2544,13 @@ def main():
         # the A2 section starts sounding like a continuation of B rather than a
         # return to A — the main driver of across-piece incoherence in form pieces.
         if section != prev_bar_section:
+            # Clear prev_bar_tokens so the first bar of the new section doesn't
+            # echo the previous section's closing phrase (removes the seam's
+            # echo-chain cause without cutting the melodic thread entirely).
+            # Keep bar_history intact — the BarEncoder's full accumulated memory
+            # is what makes B and C feel like they belong to the same piece as A.
+            # The chord progression change is sufficient to drive section contrast.
             prev_bar_tokens = None
-            # Trim bar_history to the last phrase at section boundaries.
-            # Keeping all of it made the BarEncoder reinforce A-section patterns
-            # into B/C (too fused, bouncy/repetitive); clearing it entirely made
-            # sections sound like a different piece (too disconnected).
-            # One phrase of carry-over gives continuity without domination.
-            bar_history = bar_history[-args.phrase_bars:] if bar_history else []
         prev_bar_section = section
 
         # Phrase-boundary reset: clear prev_bar_tokens at the start of each phrase
@@ -2562,7 +2563,15 @@ def main():
 
         prev   = chords[i - 1] if i > 0 else None
         prefix = chord_prefix(prev, curr, prev_bar_tokens)
-        memory, mem_key_mask = build_inference_memory(bar_encoder, bar_history, device)
+        # Build effective history: anchor bars (opening identity) + recent bars.
+        # MAX_HISTORY=16; anchor_history holds the first MOTIF_BARS bars so the
+        # model never forgets where the piece started, even at bar 40+.
+        if anchor_history:
+            n_recent      = min(16 - len(anchor_history), len(bar_history))
+            eff_history   = anchor_history + bar_history[-n_recent:] if n_recent > 0 else anchor_history
+        else:
+            eff_history   = bar_history
+        memory, mem_key_mask = build_inference_memory(bar_encoder, eff_history, device)
         events, raw_tokens = generate_bar(note_model, prefix,
                                           bar_temp, args.top_k, args.top_p, device,
                                           min_notes=args.min_notes,
@@ -2577,6 +2586,11 @@ def main():
                                           memory_key_mask=mem_key_mask)
         prev_bar_tokens = raw_tokens   # feed into next bar's prefix
         bar_history.append(raw_tokens)
+        # Pin the opening bars as permanent anchors once the motif window fills.
+        # These are always prepended to the effective history so the BarEncoder
+        # never loses sight of the piece's opening identity, even at bar 40+.
+        if not anchor_history and len(bar_history) >= MOTIF_BARS:
+            anchor_history = list(bar_history[:MOTIF_BARS])
         bar_events_list.append(events)
         if not events:
             empty += 1
