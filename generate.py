@@ -1916,23 +1916,31 @@ def _humanize_midi(mid, bpm, phrase_bars=4, jitter_ms=11.0, rubato_strength=0.04
     new_times       = [t for t, _ in abs_events]
     pending_offsets = defaultdict(deque)
 
-    for idx, (t_abs, msg) in enumerate(abs_events):
-        if msg.type == 'note_on' and msg.velocity > 0:
+    # Pre-compute one offset per unique onset tick so all notes in a chord
+    # shift together — independent per-note jitter makes chords sound "off pitch"
+    # because the brief window of incomplete harmony reads as a wrong note.
+    tick_offsets = {}
+    for t_abs, msg in abs_events:
+        if msg.type == 'note_on' and msg.velocity > 0 and t_abs not in tick_offsets:
             phrase_frac = (t_abs % phrase_ticks) / phrase_ticks
 
             # Rallentando: last 25% of phrase → notes pushed slightly later
             if phrase_frac > 0.75:
-                slow_frac      = (phrase_frac - 0.75) / 0.25
-                rubato_offset  = int(rubato_strength * phrase_ticks * slow_frac * 0.12)
+                slow_frac     = (phrase_frac - 0.75) / 0.25
+                rubato_offset = int(rubato_strength * phrase_ticks * slow_frac * 0.12)
             else:
-                rubato_offset  = 0
+                rubato_offset = 0
 
             # Random jitter: 40% strength on strong beats (beat 1 / beat 3)
             on_strong_beat = (t_abs % tpb) < (t16 // 2)
             jscale         = 0.4 if on_strong_beat else 1.0
             rand_jitter    = int(random.gauss(0, jitter_ticks * jscale))
 
-            offset         = rubato_offset + rand_jitter
+            tick_offsets[t_abs] = rubato_offset + rand_jitter
+
+    for idx, (t_abs, msg) in enumerate(abs_events):
+        if msg.type == 'note_on' and msg.velocity > 0:
+            offset         = tick_offsets.get(t_abs, 0)
             new_times[idx] = max(0, t_abs + offset)
             pending_offsets[msg.note].append(offset)
 
