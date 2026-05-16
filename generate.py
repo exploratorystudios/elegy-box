@@ -1832,6 +1832,53 @@ def vel_arc_bias(bar_idx, n_bars, strength, device):
     return bias
 
 
+# ── Vertical dissonance filter ────────────────────────────────────────
+def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, bass_split=58):
+    """
+    At each rhythmic position, detect harshly dissonant simultaneous intervals
+    (tritone=6, minor-2nd=1, major-7th=11, minor-9th=2/10) and remove the
+    non-diatonic treble note contributing the most dissonance.
+    Diatonic notes and bass notes are never touched.
+    """
+    if not diatonic_pcs:
+        return bar_events_list
+
+    HARSH = {1, 2, 6, 10, 11}
+
+    def dissonance_score(pc, other_pcs):
+        return sum(1 for o in other_pcs if (abs(pc - o) % 12) in HARSH)
+
+    result = []
+    for bar in bar_events_list:
+        from collections import defaultdict
+        by_pos = defaultdict(list)
+        for note in bar:
+            by_pos[note[0]].append(note)
+
+        remove = set()
+        for pos, notes in by_pos.items():
+            treble = [n for n in notes if n[1] >= bass_split]
+            if len(treble) < 2:
+                continue
+            pcs = [n[1] % 12 for n in treble]
+            # Check if any harsh interval exists in this chord
+            total = sum(dissonance_score(pcs[i], pcs[:i] + pcs[i+1:])
+                        for i in range(len(pcs)))
+            if total < 2:
+                continue
+            # Find the non-diatonic note with the highest dissonance contribution
+            candidates = [
+                (dissonance_score(n[1] % 12, [o[1] % 12 for o in treble if o is not n]), n)
+                for n in treble if (n[1] % 12) not in diatonic_pcs
+            ]
+            if candidates:
+                candidates.sort(key=lambda x: -x[0])
+                remove.add(id(candidates[0][1]))
+
+        result.append([n for n in bar if id(n) not in remove])
+    return result
+
+
 # ── Chromatic clash filter ────────────────────────────────────────────
 def _soften_chromatic_clashes(bar_events_list, diatonic_pcs, bass_split=58):
     """
@@ -2692,6 +2739,11 @@ def main():
         bar_events_list = _add_cross_bar_ties(
             bar_events_list, chords, bass_split=args.lh_bass_split,
             section_labels=section_labels)
+
+        # ── Vertical dissonance filter ────────────────────────────────────
+        if diatonic_roots is not None:
+            bar_events_list = _reduce_vertical_dissonance(
+                bar_events_list, diatonic_roots, bass_split=args.lh_bass_split)
 
         # ── Chromatic clash filter ────────────────────────────────────────
         if diatonic_roots is not None:
