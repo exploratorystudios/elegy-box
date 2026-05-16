@@ -1894,8 +1894,6 @@ def _humanize_midi(mid, bpm, phrase_bars=4, jitter_ms=11.0, rubato_strength=0.04
     - Phrase-end rallentando: notes arrive slightly later in the last 25% of each phrase
     Note_on and its matching note_off are shifted together so duration is preserved.
     """
-    from collections import defaultdict, deque
-
     tpb        = mid.ticks_per_beat
     tempo_us   = mido.bpm2tempo(bpm)
     ticks_per_ms = tpb / (tempo_us / 1000)
@@ -1913,12 +1911,15 @@ def _humanize_midi(mid, bpm, phrase_bars=4, jitter_ms=11.0, rubato_strength=0.04
         t += msg.time
         abs_events.append([t, msg.copy(time=0)])
 
-    new_times       = [t for t, _ in abs_events]
-    pending_offsets = defaultdict(deque)
+    new_times = [t for t, _ in abs_events]
 
     # Pre-compute one offset per unique onset tick so all notes in a chord
     # shift together — independent per-note jitter makes chords sound "off pitch"
     # because the brief window of incomplete harmony reads as a wrong note.
+    #
+    # Only note_on events are shifted; note_off events stay on the original grid.
+    # Shifting both caused same-pitch note_on/note_off reordering that produced
+    # stuck notes and phantom pitches ("out of tune" artefacts).
     tick_offsets = {}
     for t_abs, msg in abs_events:
         if msg.type == 'note_on' and msg.velocity > 0 and t_abs not in tick_offsets:
@@ -1942,12 +1943,7 @@ def _humanize_midi(mid, bpm, phrase_bars=4, jitter_ms=11.0, rubato_strength=0.04
         if msg.type == 'note_on' and msg.velocity > 0:
             offset         = tick_offsets.get(t_abs, 0)
             new_times[idx] = max(0, t_abs + offset)
-            pending_offsets[msg.note].append(offset)
-
-        elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
-            if pending_offsets[msg.note]:
-                offset         = pending_offsets[msg.note].popleft()
-                new_times[idx] = max(0, t_abs + offset)
+        # note_off events are intentionally left at their original ticks
 
     # Re-sort (note_off before note_on at same tick)
     order = sorted(range(len(abs_events)),
