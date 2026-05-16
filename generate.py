@@ -1939,11 +1939,17 @@ def _humanize_midi(mid, bpm, phrase_bars=4, jitter_ms=11.0, rubato_strength=0.04
 
             tick_offsets[t_abs] = rubato_offset + rand_jitter
 
+    # Apply offsets to note_ons only, clamping so no note_on lands before
+    # the previous note_off on the same pitch (which would cause the note_off
+    # to immediately cut the new note, producing clicks or phantom pitches).
+    last_noteoff = {}  # pitch -> latest note_off tick seen in original order
     for idx, (t_abs, msg) in enumerate(abs_events):
-        if msg.type == 'note_on' and msg.velocity > 0:
+        if msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
+            last_noteoff[msg.note] = max(last_noteoff.get(msg.note, 0), t_abs)
+        elif msg.type == 'note_on' and msg.velocity > 0:
             offset         = tick_offsets.get(t_abs, 0)
-            new_times[idx] = max(0, t_abs + offset)
-        # note_off events are intentionally left at their original ticks
+            earliest       = last_noteoff.get(msg.note, 0)
+            new_times[idx] = max(earliest, t_abs + offset)
 
     # Re-sort (note_off before note_on at same tick)
     order = sorted(range(len(abs_events)),
