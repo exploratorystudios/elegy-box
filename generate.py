@@ -2544,7 +2544,10 @@ def main():
         # return to A — the main driver of across-piece incoherence in form pieces.
         if section != prev_bar_section:
             prev_bar_tokens = None
-            bar_history     = []   # reset cross-attention memory at section boundaries
+            # Keep bar_history — the BarEncoder's accumulated memory of the piece
+            # should persist across section boundaries so B/C sections grow out
+            # of the same musical soil as A, not restart from scratch.
+            # Clearing it was causing jarring "different song" jumps at transitions.
         prev_bar_section = section
 
         # Phrase-boundary reset: clear prev_bar_tokens at the start of each phrase
