@@ -2377,6 +2377,7 @@ def main():
 
     # Motif heuristic state
     MOTIF_BARS    = 2       # collect pitch classes from first N bars of first A section
+    ANCHOR_BARS   = 2       # opening bars pinned permanently in BarEncoder memory (≤ MAX_HISTORY)
     motif_pitches = []      # raw pitches gathered during first A block
     motif_bias    = None    # built once we leave the first A section
     first_a_done  = False   # True after first A block ends
@@ -2567,10 +2568,10 @@ def main():
         # MAX_HISTORY=16; anchor_history holds the first MOTIF_BARS bars so the
         # model never forgets where the piece started, even at bar 40+.
         if anchor_history:
-            n_recent      = min(16 - len(anchor_history), len(bar_history))
-            eff_history   = anchor_history + bar_history[-n_recent:] if n_recent > 0 else anchor_history
+            n_recent    = min(16 - len(anchor_history), len(bar_history))
+            eff_history = anchor_history + bar_history[-n_recent:] if n_recent > 0 else anchor_history
         else:
-            eff_history   = bar_history
+            eff_history = bar_history
         memory, mem_key_mask = build_inference_memory(bar_encoder, eff_history, device)
         events, raw_tokens = generate_bar(note_model, prefix,
                                           bar_temp, args.top_k, args.top_p, device,
@@ -2589,8 +2590,8 @@ def main():
         # Pin the opening bars as permanent anchors once the motif window fills.
         # These are always prepended to the effective history so the BarEncoder
         # never loses sight of the piece's opening identity, even at bar 40+.
-        if not anchor_history and len(bar_history) >= MOTIF_BARS:
-            anchor_history = list(bar_history[:MOTIF_BARS])
+        if not anchor_history and len(bar_history) >= ANCHOR_BARS:
+            anchor_history = list(bar_history[:ANCHOR_BARS])
         bar_events_list.append(events)
         if not events:
             empty += 1
