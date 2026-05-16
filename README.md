@@ -21,8 +21,6 @@ python ElegyBox-site/app.py
 
 Open **http://localhost:5173** in your browser. Pick a preset, click **Generate**, and the piece streams in. Finished songs appear in the library for playback, download, rename, or deletion.
 
-> **GPU note:** `generate.py` auto-detects CUDA. CPU inference works but takes ~30 s per piece. With a GPU it's ~3–5 s.
-
 ---
 
 ## Project Structure
