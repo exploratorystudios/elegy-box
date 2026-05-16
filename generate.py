@@ -2544,10 +2544,12 @@ def main():
         # return to A — the main driver of across-piece incoherence in form pieces.
         if section != prev_bar_section:
             prev_bar_tokens = None
-            # Keep bar_history — the BarEncoder's accumulated memory of the piece
-            # should persist across section boundaries so B/C sections grow out
-            # of the same musical soil as A, not restart from scratch.
-            # Clearing it was causing jarring "different song" jumps at transitions.
+            # Trim bar_history to the last phrase at section boundaries.
+            # Keeping all of it made the BarEncoder reinforce A-section patterns
+            # into B/C (too fused, bouncy/repetitive); clearing it entirely made
+            # sections sound like a different piece (too disconnected).
+            # One phrase of carry-over gives continuity without domination.
+            bar_history = bar_history[-args.phrase_bars:] if bar_history else []
         prev_bar_section = section
 
         # Phrase-boundary reset: clear prev_bar_tokens at the start of each phrase
