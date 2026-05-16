@@ -1832,6 +1832,145 @@ def vel_arc_bias(bar_idx, n_bars, strength, device):
     return bias
 
 
+# ── Chromatic clash filter ────────────────────────────────────────────
+def _soften_chromatic_clashes(bar_events_list, diatonic_pcs, bass_split=58):
+    """
+    Removes or softens very short non-diatonic treble notes that are almost
+    certainly accidental model errors rather than intentional chromatic color:
+      - dur == 1 AND non-diatonic → remove (single 16th-note chromatic flash)
+      - dur == 2 AND non-diatonic → reduce velocity by 3 bins (soften)
+    Bass notes are left untouched — chromatic movement in the bass is normal.
+    """
+    if not diatonic_pcs:
+        return bar_events_list
+    result = []
+    for bar in bar_events_list:
+        new_bar = []
+        for pos, p, d, v in bar:
+            if p >= bass_split and (p % 12) not in diatonic_pcs:
+                if d <= 1:
+                    continue                        # drop it entirely
+                elif d <= 2:
+                    v = max(0, v - 3)              # audibly soften
+            new_bar.append((pos, p, d, v))
+        result.append(new_bar)
+    return result
+
+
+# ── Final resolution ──────────────────────────────────────────────────
+def _apply_final_resolution(bar_events_list, chords, key_root, tonic_qual,
+                             section_labels, bass_split=58, fade_bars=6):
+    """
+    Shapes the final bars so the piece closes convincingly:
+    1. Velocity decrescendo over fade_bars (smooth fade-out)
+    2. Penultimate bar: thin to long dominant chord tones (clear V setup)
+    3. Last bar: rebuild as a decisive tonic chord — root in bass,
+       root/5th/root stacked in treble, all on beat 1, held the full bar
+    """
+    if not bar_events_list or key_root is None:
+        return bar_events_list
+
+    result = [list(bar) for bar in bar_events_list]
+    n      = len(result)
+
+    _QUAL_IVS = {
+        0: [0, 4, 7],        # maj
+        1: [0, 3, 7],        # min
+        2: [0, 3, 6],        # dim
+        3: [0, 4, 8],        # aug
+        4: [0, 4, 7, 10],    # dom7
+        5: [0, 4, 7, 11],    # maj7
+        6: [0, 3, 7, 10],    # min7
+        7: [0, 3, 6, 10],    # hdim7
+        8: [0, 2, 7],        # sus2
+        9: [0, 5, 7],        # sus4
+    }
+
+    def _pcs(root, qual):
+        ivs = _QUAL_IVS.get(qual, [0, 4, 7])
+        return {(root + i) % 12 for i in ivs}
+
+    tonic_ivs = _QUAL_IVS.get(tonic_qual if tonic_qual is not None else 0, [0, 4, 7])
+    tonic_pcs = {(key_root + i) % 12 for i in tonic_ivs}
+
+    def _clamp_bass(p):
+        while p >= bass_split: p -= 12
+        while p < 21:          p += 12
+        return p
+
+    def _clamp_treble(p, lo=None):
+        lo = lo or bass_split
+        while p < lo:  p += 12
+        while p > 108: p -= 12
+        return p
+
+    # ── 1. Velocity fade ──────────────────────────────────────────────
+    for k in range(min(fade_bars, n)):
+        i     = n - 1 - k
+        # 1.0 at fade_bars out → 0.45 at last bar
+        scale = 0.45 + 0.55 * (k / max(fade_bars - 1, 1))
+        result[i] = [
+            (pos, p, d, max(0, int(v * scale + 0.5)))
+            for pos, p, d, v in result[i]
+        ]
+
+    # ── 2. Penultimate bar: thin to long dominant chord tones ─────────
+    if n >= 2:
+        penu_chord = chords[n - 2] if n - 2 < len(chords) and chords[n - 2] else None
+        penu_pcs   = _pcs(*penu_chord) if penu_chord else tonic_pcs
+        penu       = result[n - 2]
+        # Keep only chord tones with duration >= 2; cap at 5 notes
+        keepers = sorted(
+            [(pos, p, d, v) for pos, p, d, v in penu
+             if (p % 12) in penu_pcs and d >= 2],
+            key=lambda x: x[0]
+        )
+        if len(keepers) >= 2:
+            # Extend each keeper to fill from its position to bar end
+            keepers = [(pos, p, max(d, min(8, POSITIONS - pos)), v)
+                       for pos, p, d, v in keepers[:5]]
+            result[n - 2] = keepers
+
+    # ── 3. Last bar: rebuild as a decisive tonic final chord ──────────
+    # Infer register from the surrounding bars so the chord sits in
+    # the same part of the keyboard the piece has been using.
+    ref_bars   = result[max(0, n - 5): n - 1]
+    ref_treble = [p for bar in ref_bars for _, p, _, _ in bar if p >= bass_split]
+    if ref_treble:
+        ref_mid = int(sum(ref_treble) / len(ref_treble))
+    else:
+        ref_mid = 72  # middle C area
+
+    bass_root = _clamp_bass(36 + key_root)
+
+    # Build a 3-note treble chord: 5th below ref_mid, root near ref_mid, root+oct
+    fifth_pc   = (key_root + tonic_ivs[-1]) % 12          # top interval of triad
+    third_pc   = (key_root + tonic_ivs[1])  % 12
+
+    p_fifth  = _clamp_treble(bass_split + (fifth_pc - bass_split % 12) % 12, bass_split)
+    p_root   = _clamp_treble(bass_split + (key_root  - bass_split % 12) % 12, bass_split)
+    p_root_h = _clamp_treble(p_root + 12)
+
+    # Nudge each toward ref_mid
+    for _ in range(4):
+        if p_fifth  < ref_mid - 12: p_fifth  += 12
+        if p_root   < ref_mid - 6:  p_root   += 12
+    p_root_h = p_root + 12
+
+    # Ensure ordering: fifth < root < root_high
+    notes_treble = sorted({p_fifth, p_root, p_root_h})
+
+    # Velocity: moderate — the final chord should feel settled, not loud
+    vel_final = 4
+
+    final_bar = [(0, bass_root, 16, max(2, vel_final - 1))]
+    for p in notes_treble:
+        final_bar.append((0, p, 16, vel_final))
+
+    result[n - 1] = final_bar
+    return result
+
+
 # ── Expressive dynamics (phrase arcs + melodic contour) ───────────────
 def _apply_expressive_dynamics(bar_events_list, phrase_bars=4,
                                 section_labels=None, bass_split=58):
@@ -1932,11 +2071,18 @@ def _humanize_midi(mid, bpm, phrase_bars=4, jitter_ms=11.0, rubato_strength=0.04
             else:
                 rubato_offset = 0
 
-            # Random jitter: 40% strength on strong beats (beat 1 / beat 3)
-            on_strong_beat = (t_abs % tpb) < (t16 // 2)
-            jscale         = 0.4 if on_strong_beat else 1.0
-            rand_jitter    = int(random.gauss(0, jitter_ticks * jscale))
+            # Scale jitter by metrical weight so fast 16th-note runs stay
+            # clean — independent per-tick jitter on dense passages makes
+            # notes sound displaced relative to each other.
+            pos_in_beat = t_abs % tpb
+            if pos_in_beat == 0:
+                weight = 1.0        # quarter-note beat — full jitter
+            elif pos_in_beat % (tpb // 2) == 0:
+                weight = 0.5        # 8th-note — moderate jitter
+            else:
+                weight = 0.2        # 16th-note subdivision — nearly metronomic
 
+            rand_jitter = int(random.gauss(0, jitter_ticks * weight))
             tick_offsets[t_abs] = rubato_offset + rand_jitter
 
     # Apply offsets to note_ons only, clamping so no note_on lands before
@@ -2527,6 +2673,11 @@ def main():
             bar_events_list, chords, bass_split=args.lh_bass_split,
             section_labels=section_labels)
 
+        # ── Chromatic clash filter ────────────────────────────────────────
+        if diatonic_roots is not None:
+            bar_events_list = _soften_chromatic_clashes(
+                bar_events_list, diatonic_roots, bass_split=args.lh_bass_split)
+
         # ── Expressive dynamics (phrase arcs + melodic contour) ──────────
         if not args.no_humanize:
             bar_events_list = _apply_expressive_dynamics(
@@ -2541,6 +2692,21 @@ def main():
         # ── Post-climax breath ────────────────────────────────────────────
         bar_events_list = _apply_post_climax_breath(
             bar_events_list, section_labels, bass_split=args.lh_bass_split)
+
+        # ── Final resolution (fade + tonic landing) ───────────────────────
+        if key_root is not None:
+            qual_counts = {}
+            for c in chords:
+                if c:
+                    qual_counts[c[1]] = qual_counts.get(c[1], 0) + 1
+            tonic_qual_detected = (
+                1 if qual_counts.get(1, 0) + qual_counts.get(6, 0)
+                     > qual_counts.get(0, 0) + qual_counts.get(5, 0)
+                else 0
+            )
+            bar_events_list = _apply_final_resolution(
+                bar_events_list, chords, key_root, tonic_qual_detected,
+                section_labels, bass_split=args.lh_bass_split)
 
     # ── Assemble & save ───────────────────────────────────────────────
     mid = bars_to_midi(bar_events_list, bpm=args.bpm)
