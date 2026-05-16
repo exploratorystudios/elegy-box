@@ -1,0 +1,398 @@
+# ElegyBox generation commands
+# Defaults: melody_strength=2.0, melody_sigma=1.5, phrase_arc=4.0, phrase_bars=4
+#           key=random, chord_key_strength=1.0, enforce_cadence=True
+#           lh_pattern=none, lh_bass_split=58, lh_vel=3
+#           melody_boost=2, accomp_reduce=1
+# Only non-default values are listed per command.
+# Stepwise/lyrical styles use tight melody defaults (sigma=1.5, strength=2.0).
+# Wide/arpeggio styles override: melody_sigma 5.0-6.0, melody_strength 0.5.
+# key=none disables diatonic chord bias (impressionist/chromatic styles).
+# chord_key_strength is soft: lower values keep more of the model's own chords.
+# enforce_cadence now only resolves the ending; phrase-level harmony stays model-driven.
+# lh_pattern choices:
+#   alberti : 8th-note broken chord, root,5th,3rd,5th × 2 per bar
+#   stride  : long bass (dotted quarter) + staccato chord cluster on off-beats
+#   murky   : sustained root + soft octave punch on beats 2 & 4
+#   waltz   : long root + short chord on beats 2 & 3
+#   walking : stepwise quarter-note line through chord/scale tones, chromatic approach to next chord
+#   none    : default; preserves the model's own bass writing
+# lh_bass_split=64 for Romantic/dense styles with thick mid-register voicings.
+
+# ── Base ──────────────────────────────────────────────────────────────────────
+# Clean
+python generate.py --output base_clean.mid \
+  --n_bars 32 --bpm 96 --chord_temp 1.0 --note_temp 1.0 \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 4 --min_notes 8 \
+  --max_repeat 3 --key_strength 0.8 --register_strength 0.5 --register_sigma 12 --dur_bias 1.5
+
+# Slow & Lyrical
+python generate.py --output base_slow_lyrical.mid \
+  --n_bars 32 --bpm 64 --chord_temp 0.9 --note_temp 0.88 \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 4 --min_notes 6 \
+  --max_repeat 3 --key_strength 1.1 --register_strength 0.6 --register_sigma 10 --dur_bias 2.5
+
+# Bright & Quick
+python generate.py --output base_bright_quick.mid \
+  --n_bars 32 --bpm 112 --chord_temp 1.0 --note_temp 1.0 \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 6 --min_notes 10 \
+  --max_repeat 2 --key_strength 1.0 --register_strength 0.4 --register_sigma 10 --dur_bias 1.0 \
+  --melody_sigma 6.0 --melody_strength 0.6 --phrase_bars 2
+
+# Dense & Rich
+python generate.py --output base_dense_rich.mid \
+  --n_bars 32 --bpm 96 --chord_temp 0.9 --note_temp 0.95 \
+  --min_chord_notes 3 --max_chord_notes 6 --min_positions 5 --min_notes 10 \
+  --max_repeat 3 --key_strength 1.0 --register_strength 0.5 --register_sigma 12 --dur_bias 2.0 \
+  --melody_sigma 5.5 --melody_strength 0.5
+
+# Contemplative
+python generate.py --output base_contemplative.mid \
+  --n_bars 24 --bpm 70 --chord_temp 0.88 --note_temp 0.88 \
+  --min_chord_notes 2 --max_chord_notes 3 --min_positions 3 --min_notes 5 \
+  --max_repeat 3 --key_strength 1.1 --register_strength 0.6 --register_sigma 9 --dur_bias 2.0 \
+  --phrase_arc 3.0 --lh_pattern murky
+
+
+# ── Structured ────────────────────────────────────────────────────────────────
+# Classic ABA
+python generate.py --output structured_classic_aba.mid \
+  --n_bars 48 --bpm 96 --chord_temp 0.95 --note_temp 0.95 --form aba \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 5 --min_notes 8 \
+  --max_repeat 3 --key_strength 1.0 --register_strength 0.5 --register_sigma 12 --dur_bias 1.5 \
+  --b_note_temp 1.1 --b_key_strength 0.4 --b_register_offset 8 --motif_strength 0.6
+
+# Grand ABA
+python generate.py --output structured_grand_aba.mid \
+  --n_bars 64 --bpm 96 --chord_temp 0.88 --note_temp 0.9 --form aba \
+  --min_chord_notes 3 --max_chord_notes 6 --min_positions 5 --min_notes 8 \
+  --max_repeat 3 --key_strength 1.0 --register_strength 0.4 --register_sigma 13 --dur_bias 1.5 \
+  --b_note_temp 1.15 --b_key_strength 0.35 --b_register_offset 12 --motif_strength 0.65 \
+  --phrase_arc 6.0 --phrase_bars 8 --lh_pattern stride
+
+# Rondo
+python generate.py --output structured_rondo.mid \
+  --n_bars 56 --bpm 104 --chord_temp 1.0 --note_temp 0.95 --form rondo \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 5 --min_notes 8 \
+  --max_repeat 2 --key_strength 1.0 --register_strength 0.5 --register_sigma 11 --dur_bias 1.5 \
+  --b_note_temp 1.1 --b_key_strength 0.5 --b_register_offset 7 --motif_strength 0.7
+
+# Rondo Vivace
+python generate.py --output structured_rondo_vivace.mid \
+  --n_bars 56 --bpm 116 --chord_temp 1.0 --note_temp 1.05 --form rondo \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 6 --min_notes 10 \
+  --max_repeat 2 --key_strength 1.0 --register_strength 0.4 --register_sigma 10 --dur_bias 1.0 \
+  --b_note_temp 1.15 --b_key_strength 0.55 --b_register_offset 8 \
+  --top_k 40 --top_p 0.90 --motif_strength 0.7 --melody_sigma 5.5 --melody_strength 0.5 --phrase_bars 2
+
+# Arch (ABCBA)
+python generate.py --output structured_arch.mid \
+  --n_bars 50 --bpm 96 --chord_temp 0.9 --note_temp 0.9 --form arch \
+  --min_chord_notes 2 --max_chord_notes 6 --min_positions 4 --min_notes 8 \
+  --max_repeat 3 --key_strength 0.9 --register_strength 0.4 --register_sigma 14 --dur_bias 1.5 \
+  --b_note_temp 1.05 --b_key_strength 0.5 --b_register_offset 10 \
+  --register_arc 12 --vel_arc 0.5 --motif_strength 0.55
+
+# Binary Dance
+python generate.py --output structured_binary_dance.mid \
+  --n_bars 32 --bpm 96 --chord_temp 0.95 --note_temp 0.95 --form binary \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 5 --min_notes 8 \
+  --max_repeat 2 --key_strength 1.0 --register_strength 0.5 --register_sigma 10 --dur_bias 1.5 \
+  --b_note_temp 1.1 --b_key_strength 0.6 --b_register_offset -6 \
+  --melody_sigma 5.0 --melody_strength 0.5 --phrase_bars 2
+
+# Variation Suite
+python generate.py --output structured_variation_suite.mid \
+  --n_bars 48 --bpm 96 --chord_temp 0.9 --note_temp 0.9 --form variation \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 4 --min_notes 8 \
+  --max_repeat 3 --key_strength 1.0 --register_strength 0.5 --register_sigma 11 --dur_bias 1.5 \
+  --motif_strength 0.55 --lh_pattern stride
+
+# Rising Arc
+python generate.py --output structured_rising_arc.mid \
+  --n_bars 40 --bpm 96 --chord_temp 0.95 --note_temp 0.95 \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 5 --min_notes 8 \
+  --max_repeat 3 --key_strength 0.9 --register_strength 0.4 --register_sigma 12 --dur_bias 1.2 \
+  --register_arc 18 --vel_arc 0.4 --phrase_arc 2.0
+
+
+# ── Character ─────────────────────────────────────────────────────────────────
+# Nocturne
+python generate.py --output char_nocturne.mid \
+  --n_bars 32 --bpm 58 --chord_temp 0.88 --note_temp 0.9 --form aba \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 4 --min_notes 6 \
+  --max_repeat 3 --key_strength 1.1 --register_strength 0.65 --register_sigma 10 --dur_bias 2.5 \
+  --b_note_temp 1.0 --b_key_strength 0.7 --b_register_offset 6 --motif_strength 0.6
+
+# Drama
+python generate.py --output char_drama.mid \
+  --n_bars 48 --bpm 96 --chord_temp 0.88 --note_temp 1.0 --form aba \
+  --min_chord_notes 3 --max_chord_notes 6 --min_positions 5 --min_notes 10 \
+  --max_repeat 4 --key_strength 1.2 --register_strength 0.3 --register_sigma 16 --dur_bias 2.0 \
+  --b_note_temp 1.1 --b_key_strength 0.6 --b_register_offset 12 --vel_arc 0.5 --motif_strength 0.6 \
+  --melody_sigma 5.5 --melody_strength 0.5 --phrase_arc 7.0 --lh_pattern stride
+
+# Elegy
+python generate.py --output char_elegy.mid \
+  --n_bars 32 --bpm 63 --chord_temp 0.88 --note_temp 0.88 \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 4 --min_notes 6 \
+  --max_repeat 3 --key_strength 1.1 --register_strength 0.55 --register_sigma 10 --dur_bias 2.5 \
+  --register_arc -14 --vel_arc 0.35 --phrase_arc 2.5 --lh_pattern murky
+
+# Chamber
+python generate.py --output char_chamber.mid \
+  --n_bars 32 --bpm 104 --chord_temp 1.0 --note_temp 1.0 \
+  --min_chord_notes 2 --max_chord_notes 3 --min_positions 5 --min_notes 8 \
+  --max_repeat 2 --key_strength 1.0 --register_strength 0.6 --register_sigma 9 --dur_bias 2.0
+
+# Hymn
+python generate.py --output char_hymn.mid \
+  --n_bars 24 --bpm 60 --chord_temp 0.85 --note_temp 0.88 \
+  --min_chord_notes 3 --max_chord_notes 5 --min_positions 4 --min_notes 8 \
+  --max_repeat 4 --key_strength 1.3 --register_strength 0.6 --register_sigma 9 --dur_bias 2.5 \
+  --phrase_arc 2.5 --lh_pattern murky
+
+# Dance
+python generate.py --output char_dance.mid \
+  --n_bars 32 --bpm 120 --chord_temp 1.0 --note_temp 1.0 \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 6 --min_notes 10 \
+  --max_repeat 2 --key_strength 1.1 --register_strength 0.4 --register_sigma 10 --dur_bias 1.0 \
+  --melody_sigma 6.0 --melody_strength 0.5 --phrase_bars 2
+
+# Prelude
+python generate.py --output char_prelude.mid \
+  --n_bars 24 --bpm 96 --chord_temp 0.9 --note_temp 0.95 \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 6 --min_notes 10 \
+  --max_repeat 3 --key_strength 1.1 --register_strength 0.55 --register_sigma 11 --dur_bias 2.0 \
+  --melody_sigma 5.0 --melody_strength 0.5
+
+# Strict Tonal
+python generate.py --output char_strict_tonal.mid \
+  --n_bars 32 --bpm 100 --chord_temp 0.85 --note_temp 0.95 \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 5 --min_notes 8 \
+  --max_repeat 3 --key_strength 1.5 --register_strength 0.5 --register_sigma 11 --dur_bias 1.5 \
+  --chord_key_strength 2.0
+
+
+# ── Composer styles ───────────────────────────────────────────────────────────
+# Bach
+python generate.py --output style_bach.mid \
+  --n_bars 32 --bpm 104 --chord_temp 1.0 --note_temp 1.05 --form aba \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 6 --min_notes 8 \
+  --max_repeat 2 --key_strength 1.0 --register_strength 0.5 --register_sigma 10 --dur_bias 1.0 \
+  --b_note_temp 1.1 --b_key_strength 0.8 --b_register_offset 5 \
+  --top_k 40 --top_p 0.90 --motif_strength 0.65
+
+# Beethoven
+python generate.py --output style_beethoven.mid \
+  --n_bars 48 --bpm 96 --chord_temp 0.85 --note_temp 0.95 --form aba \
+  --min_chord_notes 3 --max_chord_notes 6 --min_positions 5 --min_notes 8 \
+  --max_repeat 4 --key_strength 1.2 --register_strength 0.3 --register_sigma 15 --dur_bias 1.5 \
+  --b_note_temp 1.15 --b_key_strength 0.5 --b_register_offset 12 --vel_arc 0.5 \
+  --top_k 35 --top_p 0.88 --motif_strength 0.7 \
+  --melody_sigma 5.5 --melody_strength 0.5 --phrase_arc 7.0 --lh_pattern stride
+
+# Chopin Nocturne
+python generate.py --output style_chopin_nocturne.mid \
+  --n_bars 32 --bpm 58 --chord_temp 0.88 --note_temp 0.9 --form aba \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 4 --min_notes 6 \
+  --max_repeat 3 --key_strength 1.1 --register_strength 0.65 --register_sigma 10 --dur_bias 2.5 \
+  --b_note_temp 1.0 --b_key_strength 0.6 --b_register_offset 8 \
+  --top_k 38 --top_p 0.90 --motif_strength 0.6
+
+# Chopin Étude
+python generate.py --output style_chopin_etude.mid \
+  --n_bars 32 --bpm 112 --chord_temp 0.95 --note_temp 1.05 --form binary \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 7 --min_notes 10 \
+  --max_repeat 2 --key_strength 1.0 --register_strength 0.5 --register_sigma 12 --dur_bias 1.0 \
+  --b_note_temp 1.1 --b_key_strength 0.7 --b_register_offset -8 \
+  --top_k 40 --top_p 0.90 --melody_sigma 6.0 --melody_strength 0.5 --phrase_bars 2
+
+# Mozart
+python generate.py --output style_mozart.mid \
+  --n_bars 42 --bpm 112 --chord_temp 0.9 --note_temp 0.95 --form rondo \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 5 --min_notes 8 \
+  --max_repeat 2 --key_strength 1.1 --register_strength 0.5 --register_sigma 9 --dur_bias 1.5 \
+  --b_note_temp 1.05 --b_key_strength 0.7 --b_register_offset 5 \
+  --top_k 35 --top_p 0.88 --motif_strength 0.7
+
+# Schubert
+python generate.py --output style_schubert.mid \
+  --n_bars 40 --bpm 104 --chord_temp 0.95 --note_temp 0.95 --form aba \
+  --min_chord_notes 3 --max_chord_notes 5 --min_positions 5 --min_notes 8 \
+  --max_repeat 3 --key_strength 1.0 --register_strength 0.55 --register_sigma 12 --dur_bias 2.0 \
+  --b_note_temp 1.1 --b_key_strength 0.4 --b_register_offset 7 \
+  --top_k 38 --top_p 0.90 --motif_strength 0.6 --phrase_bars 8
+
+# Brahms
+python generate.py --output style_brahms.mid \
+  --n_bars 48 --bpm 92 --chord_temp 0.88 --note_temp 0.95 --form aba \
+  --min_chord_notes 3 --max_chord_notes 6 --min_positions 5 --min_notes 10 \
+  --max_repeat 3 --key_strength 1.1 --register_strength 0.5 --register_sigma 13 --dur_bias 2.0 \
+  --b_note_temp 1.1 --b_key_strength 0.5 --b_register_offset 8 \
+  --top_k 35 --top_p 0.88 --motif_strength 0.65 \
+  --melody_sigma 5.0 --melody_strength 0.5 --phrase_arc 5.0 --phrase_bars 8 --lh_pattern stride
+
+# Handel
+python generate.py --output style_handel.mid \
+  --n_bars 42 --bpm 108 --chord_temp 0.9 --note_temp 1.0 --form rondo \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 5 --min_notes 8 \
+  --max_repeat 3 --key_strength 1.1 --register_strength 0.5 --register_sigma 11 --dur_bias 1.5 \
+  --b_note_temp 1.05 --b_key_strength 0.8 --b_register_offset 5 \
+  --top_k 38 --top_p 0.90 --motif_strength 0.7 --phrase_bars 4
+
+# Vivaldi
+python generate.py --output style_vivaldi.mid \
+  --n_bars 32 --bpm 120 --chord_temp 1.0 --note_temp 1.05 --form arch \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 7 --min_notes 10 \
+  --max_repeat 2 --key_strength 1.0 --register_strength 0.4 --register_sigma 8 --dur_bias 1.0 \
+  --b_note_temp 1.1 --b_key_strength 0.7 --b_register_offset 10 \
+  --register_arc 10 --vel_arc 0.4 --top_k 40 --top_p 0.90 --motif_strength 0.55 \
+  --melody_sigma 6.0 --melody_strength 0.5 --phrase_bars 2
+
+# Debussy  (key=none: no diatonic constraint; lh_pattern=none: no Alberti bass)
+python generate.py --output style_debussy.mid \
+  --n_bars 32 --bpm 68 --chord_temp 1.05 --note_temp 1.0 --form arch \
+  --min_chord_notes 3 --max_chord_notes 5 --min_positions 4 --min_notes 8 \
+  --max_repeat 3 --key_strength 0.5 --register_strength 0.65 --register_sigma 14 --dur_bias 2.0 \
+  --b_note_temp 1.1 --b_key_strength 0.2 --b_register_offset 12 \
+  --register_arc 8 --vel_arc 0.4 --top_k 45 --top_p 0.93 --motif_strength 0.35 \
+  --key none --lh_pattern none --melody_sigma 5.0 --melody_strength 0.5 --phrase_arc 6.0
+
+# Satie  (lh_pattern=none: bare two-voice texture, Alberti would ruin it)
+python generate.py --output style_satie.mid \
+  --n_bars 35 --bpm 52 --chord_temp 0.88 --note_temp 0.85 --form arch \
+  --min_chord_notes 1 --max_chord_notes 2 --min_positions 3 --min_notes 4 \
+  --max_repeat 3 --key_strength 0.8 --register_strength 0.7 --register_sigma 8 --dur_bias 3.0 \
+  --b_note_temp 0.9 --b_key_strength 0.55 --b_register_offset 5 \
+  --register_arc 5 --vel_arc 0.3 --top_k 38 --top_p 0.90 --motif_strength 0.65 \
+  --lh_pattern none --phrase_arc 2.0
+
+# Liszt  (lh_bass_split=64: thick mid-register voicings; stride: virtuosic stride bass)
+python generate.py --output style_liszt.mid \
+  --n_bars 48 --bpm 104 --chord_temp 0.88 --note_temp 1.0 --form variation \
+  --min_chord_notes 3 --max_chord_notes 6 --min_positions 5 --min_notes 10 \
+  --max_repeat 3 --key_strength 1.0 --register_strength 0.3 --register_sigma 16 --dur_bias 1.5 \
+  --register_arc 8 --vel_arc 0.4 --top_k 38 --top_p 0.90 --motif_strength 0.65 \
+  --lh_bass_split 64 --lh_pattern stride --melody_sigma 5.5 --melody_strength 0.5 --phrase_arc 6.0
+
+# Beethoven Scherzo  (fast rondo, 2-bar phrases, stark dynamics, stride bass)
+python generate.py --output style_beethoven_scherzo.mid \
+  --n_bars 42 --bpm 152 --chord_temp 1.0 --note_temp 1.1 --form rondo \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 6 --min_notes 8 \
+  --max_repeat 2 --key_strength 1.2 --register_strength 0.4 --register_sigma 12 --dur_bias 0.8 \
+  --b_note_temp 1.1 --b_key_strength 0.6 --b_register_offset 8 --vel_arc 0.3 --motif_strength 0.75 \
+  --melody_sigma 6.0 --melody_strength 0.5 --phrase_bars 2 --phrase_arc 3.0 --top_k 35 --top_p 0.88 \
+  --lh_pattern stride
+
+# Beethoven Sonata  (allegro binary, driving themes, stride bass)
+python generate.py --output style_beethoven_sonata.mid \
+  --n_bars 48 --bpm 116 --chord_temp 0.9 --note_temp 1.0 --form binary \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 5 --min_notes 8 \
+  --max_repeat 3 --key_strength 1.1 --register_strength 0.4 --register_sigma 13 --dur_bias 1.0 \
+  --b_note_temp 1.1 --b_key_strength 0.55 --b_register_offset 10 \
+  --register_arc 8 --vel_arc 0.4 --motif_strength 0.7 \
+  --melody_sigma 5.0 --melody_strength 0.5 --phrase_bars 4 --phrase_arc 5.0 --top_k 35 --top_p 0.88 \
+  --lh_pattern stride
+
+# Chopin Ballade  (epic arch, 64 bars, lyrical → turbulent climax)
+python generate.py --output style_chopin_ballade.mid \
+  --n_bars 64 --bpm 63 --chord_temp 0.9 --note_temp 0.95 --form arch \
+  --min_chord_notes 2 --max_chord_notes 6 --min_positions 4 --min_notes 6 \
+  --max_repeat 3 --key_strength 1.0 --register_strength 0.45 --register_sigma 13 --dur_bias 2.0 \
+  --b_note_temp 1.1 --b_key_strength 0.5 --b_register_offset 10 \
+  --register_arc 12 --vel_arc 0.6 --motif_strength 0.7 \
+  --melody_sigma 3.5 --melody_strength 0.5 --phrase_bars 8 --phrase_arc 8.0 --top_k 38 --top_p 0.90
+
+# Chopin Waltz  (elegant ABA, lilting triple feel, waltz oom-pah-pah bass)
+python generate.py --output style_chopin_waltz.mid \
+  --n_bars 32 --bpm 132 --chord_temp 0.9 --note_temp 0.95 --form aba \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 5 --min_notes 8 \
+  --max_repeat 2 --key_strength 0.9 --register_strength 0.55 --register_sigma 11 --dur_bias 1.5 \
+  --b_note_temp 1.0 --b_key_strength 0.45 --b_register_offset 5 --motif_strength 0.6 \
+  --melody_sigma 5.0 --melody_strength 0.5 --phrase_bars 4 --phrase_arc 4.0 --phrase_repeat_prob 0.45 --top_k 38 --top_p 0.90 \
+  --lh_pattern waltz
+
+# Mozart Allegro  (crisp rondo, 2-bar phrases, bright and witty)
+python generate.py --output style_mozart_allegro.mid \
+  --n_bars 42 --bpm 132 --chord_temp 0.9 --note_temp 0.95 --form rondo \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 6 --min_notes 8 \
+  --max_repeat 2 --key_strength 1.2 --register_strength 0.5 --register_sigma 9 --dur_bias 0.8 \
+  --b_note_temp 1.0 --b_key_strength 0.8 --b_register_offset 4 --motif_strength 0.75 \
+  --melody_sigma 5.5 --melody_strength 0.5 --phrase_bars 2 --top_k 35 --top_p 0.88
+
+# Mozart Andante  (serene ABA, singing melody, sparse texture)
+python generate.py --output style_mozart_andante.mid \
+  --n_bars 32 --bpm 66 --chord_temp 0.88 --note_temp 0.9 --form aba \
+  --min_chord_notes 2 --max_chord_notes 3 --min_positions 4 --min_notes 6 \
+  --max_repeat 3 --key_strength 1.2 --register_strength 0.6 --register_sigma 9 --dur_bias 2.0 \
+  --b_note_temp 1.0 --b_key_strength 0.75 --b_register_offset 5 --motif_strength 0.7 \
+  --phrase_bars 4 --phrase_arc 3.0 --top_k 35 --top_p 0.88
+
+# Bach Invention  (two-voice binary, imitative counterpoint; lh_bass_split=52 keeps voices close)
+python generate.py --output style_bach_invention.mid \
+  --n_bars 24 --bpm 100 --chord_temp 1.0 --note_temp 1.05 --form binary \
+  --min_chord_notes 2 --max_chord_notes 2 --min_positions 6 --min_notes 8 \
+  --max_repeat 2 --key_strength 1.0 --register_strength 0.5 --register_sigma 8 --dur_bias 0.8 \
+  --melody_sigma 3.5 --melody_strength 1.5 \
+  --b_note_temp 1.05 --b_key_strength 0.85 --b_register_offset 4 --motif_strength 0.8 \
+  --phrase_bars 4 --lh_bass_split 52 --lh_vel 2 --top_k 40 --top_p 0.90
+
+# Bach Prelude  (flowing arpeggiated prelude, no fixed form)
+python generate.py --output style_bach_prelude.mid \
+  --n_bars 24 --bpm 96 --chord_temp 1.0 --note_temp 1.0 \
+  --min_chord_notes 3 --max_chord_notes 5 --min_positions 6 --min_notes 10 \
+  --max_repeat 3 --key_strength 1.0 --register_strength 0.45 --register_sigma 10 --dur_bias 1.0 \
+  --melody_sigma 6.0 --melody_strength 0.4 --motif_strength 0.5 --phrase_bars 4 --top_k 40 --top_p 0.90
+
+# Schubert Impromptu  (lyrical arch, warm harmonies, romantic sweep)
+python generate.py --output style_schubert_impromptu.mid \
+  --n_bars 40 --bpm 96 --chord_temp 0.95 --note_temp 0.95 --form arch \
+  --min_chord_notes 2 --max_chord_notes 5 --min_positions 5 --min_notes 8 \
+  --max_repeat 3 --key_strength 0.95 --register_strength 0.55 --register_sigma 12 --dur_bias 2.0 \
+  --b_note_temp 1.1 --b_key_strength 0.45 --b_register_offset 8 \
+  --register_arc 6 --vel_arc 0.35 --motif_strength 0.6 \
+  --melody_sigma 3.5 --melody_strength 0.5 --phrase_bars 8 --phrase_arc 5.0 --top_k 38 --top_p 0.90
+
+
+# ── Character (new) ───────────────────────────────────────────────────────────
+# Scherzo  (fast rondo, impish 2-bar phrases)
+python generate.py --output char_scherzo.mid \
+  --n_bars 42 --bpm 148 --chord_temp 1.0 --note_temp 1.1 --form rondo \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 6 --min_notes 8 \
+  --max_repeat 2 --key_strength 1.1 --register_strength 0.45 --register_sigma 11 --dur_bias 0.8 \
+  --b_note_temp 1.1 --b_key_strength 0.6 --b_register_offset 8 --motif_strength 0.7 \
+  --melody_sigma 6.0 --melody_strength 0.5 --phrase_bars 2 --phrase_arc 3.0
+
+# March  (steady binary, strong metric emphasis)
+python generate.py --output char_march.mid \
+  --n_bars 32 --bpm 100 --chord_temp 0.95 --note_temp 1.0 --form binary \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 4 --min_notes 8 \
+  --max_repeat 3 --key_strength 1.2 --register_strength 0.5 --register_sigma 11 --dur_bias 1.5 \
+  --b_note_temp 1.05 --b_key_strength 0.7 --b_register_offset -4 --motif_strength 0.7 \
+  --phrase_bars 4 --metric_strength 3.0 --lh_pattern stride
+
+# Lullaby  (slow ABA, soothing, gentle vel arc)
+python generate.py --output char_lullaby.mid \
+  --n_bars 24 --bpm 48 --chord_temp 0.88 --note_temp 0.9 --form aba \
+  --min_chord_notes 2 --max_chord_notes 3 --min_positions 3 --min_notes 5 \
+  --max_repeat 4 --key_strength 1.2 --register_strength 0.65 --register_sigma 9 --dur_bias 3.0 \
+  --b_note_temp 0.9 --b_key_strength 0.8 --b_register_offset 4 --motif_strength 0.7 \
+  --phrase_bars 4 --phrase_arc 2.0 --vel_arc 0.25
+
+# Toccata  (fast arch, dense motor rhythm, wide register arc)
+python generate.py --output char_toccata.mid \
+  --n_bars 32 --bpm 144 --chord_temp 1.0 --note_temp 1.1 --form arch \
+  --min_chord_notes 2 --max_chord_notes 4 --min_positions 8 --min_notes 12 \
+  --max_repeat 2 --key_strength 1.0 --register_strength 0.4 --register_sigma 12 --dur_bias 0.5 \
+  --b_note_temp 1.1 --b_key_strength 0.7 --b_register_offset 10 \
+  --register_arc 10 --vel_arc 0.4 --motif_strength 0.5 \
+  --melody_sigma 6.0 --melody_strength 0.4 --phrase_bars 2
+
+# Fantasia  (free-form arch, wandering harmony, wide register)
+python generate.py --output char_fantasia.mid \
+  --n_bars 40 --bpm 84 --chord_temp 1.05 --note_temp 1.0 --form arch \
+  --min_chord_notes 2 --max_chord_notes 6 --min_positions 4 --min_notes 6 \
+  --max_repeat 3 --key_strength 0.8 --register_strength 0.35 --register_sigma 15 --dur_bias 2.0 \
+  --b_note_temp 1.15 --b_key_strength 0.4 --b_register_offset 12 \
+  --register_arc 15 --vel_arc 0.5 --motif_strength 0.5 \
+  --melody_sigma 5.0 --melody_strength 0.5 --phrase_bars 8 --phrase_arc 8.0
