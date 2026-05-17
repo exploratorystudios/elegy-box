@@ -1335,24 +1335,33 @@ def _truncate_cross_chord_sustains(bar_events_list, chords, bass_split=58):
     """
     Treble notes with long durations can sustain across bar boundaries into a bar
     where they are no longer chord tones, creating lingering dissonance.
-    For each bar transition, check if any treble note from the previous bar extends
-    into the new bar and is non-chord-tone in the new chord — if so, truncate it
-    to end exactly at the bar boundary.
+    For each bar transition:
+    1. Truncate any carry that is a non-chord-tone in the next bar.
+    2. Truncate any carry that creates a m2 semitone clash with a note starting
+       within the first 2 slots of the next bar (even if the carry is a chord tone).
     """
     if not chords:
         return bar_events_list
     result = [list(bar) for bar in bar_events_list]
     for bar_idx in range(1, len(result)):
         chord = chords[bar_idx] if bar_idx < len(chords) else None
-        if chord is None:
-            continue
-        root, qual = chord
-        ivs = _QUALITY_INTERVALS[qual] if qual < len(_QUALITY_INTERVALS) else [0, 4, 7]
-        chord_pcs = set((root + iv) % 12 for iv in ivs)
+        next_bar = result[bar_idx]
         prev = result[bar_idx - 1]
+        chord_pcs = set()
+        if chord is not None:
+            root, qual = chord
+            ivs = _QUALITY_INTERVALS[qual] if qual < len(_QUALITY_INTERVALS) else [0, 4, 7]
+            chord_pcs = set((root + iv) % 12 for iv in ivs)
         for j, (pos, p, d, v) in enumerate(prev):
-            if p >= bass_split and pos + d > 16 and p % 12 not in chord_pcs:
-                # Sustains into bar_idx where it's a non-chord-tone — truncate
+            if p < bass_split or pos + d <= 16:
+                continue
+            # Condition 1: non-chord-tone in next bar
+            if chord_pcs and p % 12 not in chord_pcs:
+                result[bar_idx - 1][j] = (pos, p, max(1, 16 - pos), v)
+                continue
+            # Condition 2: m2 clash with any note starting at beat 1 of next bar
+            if any(abs(p - p2) == 1 and pos2 <= 2 and p2 >= bass_split
+                   for pos2, p2, d2, v2 in next_bar):
                 result[bar_idx - 1][j] = (pos, p, max(1, 16 - pos), v)
     return result
 
@@ -2158,6 +2167,41 @@ def _soften_chromatic_clashes(bar_events_list, diatonic_pcs, bass_split=58):
                     v = max(0, v - 3)              # audibly soften
             new_bar.append((pos, p, d, v))
         result.append(new_bar)
+    return result
+
+
+def _strip_m2_clashes(bar_events_list, bass_split=58):
+    """
+    Final safety pass: remove any remaining same-bar m2 semitone clashes between
+    treble notes that overlap in slot space. Removes the lower-pitched note of each
+    clashing pair (higher pitch = melody tone wins). No key knowledge needed.
+    """
+    result = []
+    for bar in bar_events_list:
+        treble = [n for n in bar if n[1] >= bass_split]
+        remove = set()
+        for i in range(len(treble)):
+            ni = treble[i]
+            if id(ni) in remove:
+                continue
+            for j in range(i + 1, len(treble)):
+                nj = treble[j]
+                if id(nj) in remove:
+                    continue
+                if abs(ni[1] - nj[1]) != 1:
+                    continue
+                if ni[0] >= nj[0] + nj[2] or nj[0] >= ni[0] + ni[2]:
+                    continue  # no slot overlap
+                # Remove the lower pitch; if one is much longer, keep it
+                if ni[2] > nj[2] * 2:
+                    remove.add(id(nj))
+                elif nj[2] > ni[2] * 2:
+                    remove.add(id(ni)); break
+                elif ni[1] < nj[1]:
+                    remove.add(id(ni)); break
+                else:
+                    remove.add(id(nj))
+        result.append([n for n in bar if id(n) not in remove])
     return result
 
 
@@ -3063,6 +3107,9 @@ def main():
         if diatonic_roots is not None:
             bar_events_list = _soften_chromatic_clashes(
                 bar_events_list, diatonic_roots, bass_split=args.lh_bass_split)
+
+        # ── m2 safety pass (catches any remaining adjacent-semitone clashes) ─
+        bar_events_list = _strip_m2_clashes(bar_events_list, bass_split=args.lh_bass_split)
 
         # ── Expressive dynamics (phrase arcs + melodic contour) ──────────
         if not args.no_humanize:
