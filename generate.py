@@ -1337,8 +1337,8 @@ def _truncate_cross_chord_sustains(bar_events_list, chords, bass_split=58):
     where they are no longer chord tones, creating lingering dissonance.
     For each bar transition:
     1. Truncate any carry that is a non-chord-tone in the next bar.
-    2. Truncate any carry that creates a m2 semitone clash with a note starting
-       within the first 2 slots of the next bar (even if the carry is a chord tone).
+    2. Truncate any carry that creates a m2 semitone clash with any note in the
+       next bar (even if the carry is a chord tone).
     """
     if not chords:
         return bar_events_list
@@ -1359,8 +1359,8 @@ def _truncate_cross_chord_sustains(bar_events_list, chords, bass_split=58):
             if chord_pcs and p % 12 not in chord_pcs:
                 result[bar_idx - 1][j] = (pos, p, max(1, 16 - pos), v)
                 continue
-            # Condition 2: m2 clash with any note starting at beat 1 of next bar
-            if any(abs(p - p2) == 1 and pos2 <= 2 and p2 >= bass_split
+            # Condition 2: m2 clash with any treble note in the next bar
+            if any(abs(p - p2) == 1 and p2 >= bass_split
                    for pos2, p2, d2, v2 in next_bar):
                 result[bar_idx - 1][j] = (pos, p, max(1, 16 - pos), v)
     return result
@@ -3151,6 +3151,13 @@ def main():
             bar_events_list = _apply_final_resolution(
                 bar_events_list, chords, key_root, tonic_qual_detected,
                 section_labels, bass_split=args.lh_bass_split)
+            # Final resolution rebuilds the last bar with new notes — re-run
+            # carry truncation so any pre-existing cross-bar sustains into the
+            # rebuilt bar don't create m2 clashes with the new chord.
+            bar_events_list = _truncate_cross_chord_sustains(
+                bar_events_list, chords, bass_split=args.lh_bass_split)
+            bar_events_list = _strip_m2_clashes(
+                bar_events_list, bass_split=args.lh_bass_split)
 
     # ── Assemble & save ───────────────────────────────────────────────
     mid = bars_to_midi(bar_events_list, bpm=args.bpm)
