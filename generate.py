@@ -730,16 +730,28 @@ def _apply_phrase_repetition(bar_events_list, section_labels, phrase_bars, repea
     With probability repeat_prob, copy phrases 0,1 over phrases 2,3
     within each 4-phrase group — creating antecedent/consequent pairs
     that repeat (ABAB) rather than doubling (AABB).
+
+    Skips non-first occurrences of a section label so that phrase_rep
+    doesn't scramble bars that _apply_aba_recapitulation later overwrites.
     """
     import random
     result = [list(b) for b in bar_events_list]
     n      = len(result)
     i      = 0
+    seen_sections = set()
     while i < n:
         section = section_labels[i]
         j = i
         while j < n and section_labels[j] == section:
             j += 1
+        # Only apply phrase repetition to the first run of each section label.
+        # Recapitulated sections (second A in ABA, second B in arch, etc.) already
+        # have their note content set by _apply_aba_recapitulation; applying phrase_rep
+        # on top would overwrite that content with stale pre-recapitulation bars.
+        if section in seen_sections:
+            i = j
+            continue
+        seen_sections.add(section)
         # Collect phrase start indices within this section
         phrases = []
         p = i
@@ -1904,24 +1916,38 @@ def vel_arc_bias(bar_idx, n_bars, strength, device):
 
 
 # ── Vertical dissonance filter ────────────────────────────────────────
-def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, bass_split=58):
+def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, chords=None, bass_split=58):
     """
-    At each rhythmic position, detect harshly dissonant simultaneous intervals
-    (tritone=6, minor-2nd=1, major-7th=11, minor-9th=2/10) and remove the
-    non-diatonic treble note contributing the most dissonance.
-    Diatonic notes and bass notes are never touched.
+    At each rhythmic position, detect harshly dissonant simultaneous treble
+    intervals (tritone=6, m2=1, M7=11) and remove the note most responsible:
+
+    Priority order for removal candidates:
+      1. Non-diatonic note with highest dissonance score  (chromatic accident)
+      2. Diatonic non-chord-tone with highest score       (passing tone in wrong place)
+      3. Shortest diatonic chord-tone if score still high (last resort)
+
+    Bass notes are never removed. Chord-member tritones (e.g. F#+C in a D7)
+    are intentional and are left intact only when BOTH notes are chord tones.
     """
     if not diatonic_pcs:
         return bar_events_list
 
-    HARSH = {1, 6, 11}   # m2, tritone, M7 — actual dissonances; M2/m7 omitted
+    HARSH = {1, 6, 11}   # m2, tritone, M7
 
     def dissonance_score(pc, other_pcs):
         return sum(1 for o in other_pcs if (abs(pc - o) % 12) in HARSH)
 
     result = []
-    for bar in bar_events_list:
+    for bar_idx, bar in enumerate(bar_events_list):
         from collections import defaultdict
+        # Build chord-tone set for this bar (if chord data supplied)
+        chord = chords[bar_idx] if (chords and bar_idx < len(chords)) else None
+        if chord is not None:
+            chord_ivs = _QUALITY_INTERVALS[chord[1]] if chord[1] < len(_QUALITY_INTERVALS) else [0, 4, 7]
+            chord_pcs = {(chord[0] + iv) % 12 for iv in chord_ivs}
+        else:
+            chord_pcs = diatonic_pcs  # treat all diatonic as chord tones if unknown
+
         by_pos = defaultdict(list)
         for note in bar:
             by_pos[note[0]].append(note)
@@ -1932,19 +1958,34 @@ def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, bass_split=58):
             if len(treble) < 2:
                 continue
             pcs = [n[1] % 12 for n in treble]
-            # Check if any harsh interval exists in this chord
             total = sum(dissonance_score(pcs[i], pcs[:i] + pcs[i+1:])
                         for i in range(len(pcs)))
             if total < 2:
                 continue
-            # Find the non-diatonic note with the highest dissonance contribution
-            candidates = [
-                (dissonance_score(n[1] % 12, [o[1] % 12 for o in treble if o is not n]), n)
-                for n in treble if (n[1] % 12) not in diatonic_pcs
-            ]
-            if candidates:
-                candidates.sort(key=lambda x: -x[0])
-                remove.add(id(candidates[0][1]))
+
+            def _score(n):
+                return dissonance_score(n[1] % 12, [o[1] % 12 for o in treble if o is not n])
+
+            # Pass 1: remove non-diatonic note with highest dissonance
+            non_dia = [(s, n) for n in treble if (n[1] % 12) not in diatonic_pcs
+                       for s in [_score(n)]]
+            if non_dia:
+                non_dia.sort(key=lambda x: -x[0])
+                if non_dia[0][0] >= 1:
+                    remove.add(id(non_dia[0][1]))
+                    continue
+
+            # Pass 2: remove diatonic non-chord-tone with highest dissonance
+            non_ct = [(s, n) for n in treble if (n[1] % 12) not in chord_pcs
+                      for s in [_score(n)]]
+            if non_ct:
+                non_ct.sort(key=lambda x: -x[0])
+                if non_ct[0][0] >= 1:
+                    remove.add(id(non_ct[0][1]))
+                    continue
+
+            # Pass 3 (last resort): both notes are chord tones forming a harsh interval.
+            # This is a harmonic tritone (e.g. F#+C in D7) — intentional, leave it.
 
         result.append([n for n in bar if id(n) not in remove])
     return result
@@ -2825,7 +2866,8 @@ def main():
         # ── Vertical dissonance filter ────────────────────────────────────
         if diatonic_roots is not None:
             bar_events_list = _reduce_vertical_dissonance(
-                bar_events_list, diatonic_roots, bass_split=args.lh_bass_split)
+                bar_events_list, diatonic_roots, chords=chords,
+                bass_split=args.lh_bass_split)
 
         # ── Chromatic clash filter ────────────────────────────────────────
         if diatonic_roots is not None:
