@@ -1545,6 +1545,67 @@ def _collapse_inner_voice_runs(bar_events_list, bass_split=58, same_pitch_thresh
     return result
 
 
+def _break_top_voice_loops(bar_events_list, bass_split=58, run_threshold=3):
+    """
+    Detect runs of >= run_threshold consecutive bars sharing the same top-voice
+    pitch and octave-displace the repeated bars to break the loop.
+
+    Only bars 2+ within a run are displaced (the first bar keeps its pitch).
+    Displacement tries -12 first (lower octave), then +12, staying within
+    [bass_split, 91].  If no valid displacement exists, the bar is left alone.
+    """
+    MELODY_LO = bass_split
+    MELODY_HI = 91
+
+    n = len(bar_events_list)
+    result = [list(bar) for bar in bar_events_list]
+
+    # Find top note per bar
+    def bar_top(bar):
+        pitches = [p for _, p, _, _ in bar if p >= bass_split]
+        return max(pitches) if pitches else None
+
+    for _pass in range(4):   # iterate until no new loops are created
+        tops = [bar_top(result[b]) for b in range(n)]
+        changed = False
+
+        b = 0
+        while b < n:
+            if tops[b] is None:
+                b += 1
+                continue
+            run_end = b + 1
+            while run_end < n and tops[run_end] == tops[b]:
+                run_end += 1
+            run_len = run_end - b
+            if run_len >= run_threshold:
+                orig_pitch = tops[b]
+                for rb in range(b + 1, run_end):
+                    best_delta = None
+                    for delta in (-12, 12, -24, 24):
+                        cand = orig_pitch + delta
+                        if MELODY_LO <= cand <= MELODY_HI:
+                            best_delta = delta
+                            break
+                    if best_delta is None:
+                        continue
+                    new_bar = []
+                    for pos, p, d, v in result[rb]:
+                        if p == orig_pitch:
+                            new_bar.append((pos, p + best_delta, d, v))
+                        else:
+                            new_bar.append((pos, p, d, v))
+                    result[rb] = new_bar
+                    tops[rb] = orig_pitch + best_delta
+                    changed = True
+            b = run_end
+
+        if not changed:
+            break
+
+    return result
+
+
 def _smooth_melody_leaps(bar_events_list, bass_split=58, max_leap=7, section_labels=None):
     """
     Reduce large leaps in the top (melody) voice by octave-displacing notes.
@@ -1578,6 +1639,14 @@ def _smooth_melody_leaps(bar_events_list, bass_split=58, max_leap=7, section_lab
                 if clamped != pitch:
                     result[bar_idx][i] = (pos, clamped, dur, vel)
 
+        # At section boundaries, relax the leap threshold rather than hard-resetting
+        # prev_top. A full reset (prev_top=None) allows unconstrained leaps that
+        # sound abrupt; keeping prev_top with a wider allowance lets the melody
+        # make a deliberate register shift while still preventing extreme jumps.
+        at_boundary = (section_labels is not None and bar_idx > 0 and
+                       section_labels[bar_idx] != section_labels[bar_idx - 1])
+        effective_max_leap = max_leap + 4 if at_boundary else max_leap
+
         # Build pos → [(event_index, pitch)] for treble notes
         by_pos = {}
         for i, (pos, pitch, dur, vel) in enumerate(result[bar_idx]):
@@ -1591,7 +1660,7 @@ def _smooth_melody_leaps(bar_events_list, bass_split=58, max_leap=7, section_lab
                 leap = abs(top_pitch - prev_top)
                 leap_pc = leap % 12
                 # Smooth both large leaps AND tritone intervals at any distance
-                if leap > max_leap or leap_pc == 6:
+                if leap > effective_max_leap or leap_pc == 6:
                     best_pitch, best_leap = top_pitch, leap
                     for delta in (-12, 12, -24, 24):
                         cand = top_pitch + delta
@@ -1784,6 +1853,11 @@ def _add_cross_bar_ties(bar_events_list, chords, bass_split=58, tie_dur=2,
                                   for pos2, p, d2, v2 in result[bar_idx + 1])
         if same_pitch_at_beat1:
             continue
+        # Also skip if the tie would create a m2 clash with a note at beat 1 of bar N+1
+        m2_at_beat1 = any(abs(p - pitch) == 1 and pos2 <= 2
+                          for pos2, p, d2, v2 in result[bar_idx + 1] if p >= bass_split)
+        if m2_at_beat1:
+            continue
 
         # Extend to sustain tie_dur 16th notes into bar N+1
         new_dur = (16 - pos) + tie_dur
@@ -1876,8 +1950,8 @@ def _apply_velocity_differentiation(bar_events_list, melody_boost=1, accomp_redu
     return result
 
 
-def _apply_section_crossfade(bar_events_list, section_labels, fade_bars=2,
-                             out_floor=0.82, in_floor=0.82):
+def _apply_section_crossfade(bar_events_list, section_labels, fade_bars=3,
+                             out_floor=0.60, in_floor=0.65):
     """
     At each section boundary, apply a brief dynamic breath:
       - Last fade_bars of the outgoing section fade from 1.0 → out_floor
@@ -1990,7 +2064,60 @@ def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, chords=None, bass
 
         treble = [n for n in bar if n[1] >= bass_split]
 
+        # Also include notes from the previous bar that sustain into this one
+        # (cross-bar ties added by _add_cross_bar_ties have pos+dur > 16).
+        # Represent them as if they start at pos=0 with their remaining duration.
+        # Mark them read-only so we only remove from the current bar.
+        BAR_SLOTS = 16
+        carry_treble = []
+        if bar_idx > 0:
+            for n in bar_events_list[bar_idx - 1]:
+                if n[1] >= bass_split and n[0] + n[2] > BAR_SLOTS:
+                    remain = n[0] + n[2] - BAR_SLOTS
+                    carry_treble.append((0, n[1], remain, n[3]))
+
         remove = set()
+
+        def _check_pair(ni, nj, can_remove_ni=True, can_remove_nj=True):
+            """Return id of the note to remove, or None."""
+            if not overlaps(ni, nj): return None
+            if not harsh_actual(ni[1], nj[1]): return None
+            pi, pj = ni[1] % 12, nj[1] % 12
+            ni_dia = pi in diatonic_pcs; nj_dia = pj in diatonic_pcs
+            ni_ct  = pi in chord_pcs;   nj_ct  = pj in chord_pcs
+            if not ni_dia and nj_dia:
+                return id(ni) if can_remove_ni else None
+            elif not nj_dia and ni_dia:
+                return id(nj) if can_remove_nj else None
+            elif not ni_ct and nj_ct:
+                return id(ni) if can_remove_ni else None
+            elif not nj_ct and ni_ct:
+                return id(nj) if can_remove_nj else None
+            else:
+                if ni[2] < nj[2]:
+                    return id(ni) if can_remove_ni else id(nj) if can_remove_nj else None
+                elif nj[2] < ni[2]:
+                    return id(nj) if can_remove_nj else id(ni) if can_remove_ni else None
+                elif ni[1] < nj[1]:
+                    return id(ni) if can_remove_ni else id(nj) if can_remove_nj else None
+                else:
+                    return id(nj) if can_remove_nj else id(ni) if can_remove_ni else None
+
+        # Check clashes with carry-over sustained notes from previous bar.
+        # Carry notes can't be removed (they're in bar N-1's output already).
+        # Only remove the current bar's note if it is non-diatonic — a fresh
+        # note that is diatonic (or a chord tone) should never yield to a
+        # finishing carry note.
+        for ni in treble:
+            if id(ni) in remove: continue
+            for nc in carry_treble:
+                if not overlaps(ni, nc): continue
+                if not harsh_actual(ni[1], nc[1]): continue
+                pi = ni[1] % 12
+                if pi not in diatonic_pcs:
+                    remove.add(id(ni)); break
+                # diatonic current-bar note vs carry — leave it alone
+
         for i in range(len(treble)):
             ni = treble[i]
             if id(ni) in remove:
@@ -1999,36 +2126,11 @@ def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, chords=None, bass
                 nj = treble[j]
                 if id(nj) in remove:
                     continue
-                if not overlaps(ni, nj):
-                    continue
-                if not harsh_actual(ni[1], nj[1]):
-                    continue
-
-                pi, pj = ni[1] % 12, nj[1] % 12
-                # Both chord tones → intentional harmonic color, leave
-                if pi in chord_pcs and pj in chord_pcs:
-                    continue
-
-                # Decide which to remove: non-diatonic > non-chord-tone > shorter
-                ni_dia = pi in diatonic_pcs
-                nj_dia = pj in diatonic_pcs
-                ni_ct  = pi in chord_pcs
-                nj_ct  = pj in chord_pcs
-
-                if not ni_dia and nj_dia:
-                    remove.add(id(ni)); break
-                elif not nj_dia and ni_dia:
-                    remove.add(id(nj))
-                elif not ni_ct and nj_ct:
-                    remove.add(id(ni)); break
-                elif not nj_ct and ni_ct:
-                    remove.add(id(nj))
-                else:
-                    # Same harmonic status — remove the shorter (passing) note
-                    if ni[2] <= nj[2]:
-                        remove.add(id(ni)); break
-                    else:
-                        remove.add(id(nj))
+                victim = _check_pair(ni, nj)
+                if victim is not None:
+                    remove.add(victim)
+                    if victim == id(ni):
+                        break
 
         result.append([n for n in bar if id(n) not in remove])
     return result
@@ -2153,11 +2255,13 @@ def _apply_final_resolution(bar_events_list, chords, key_root, tonic_qual,
     p_root   = _clamp_treble(bass_split + (key_root  - bass_split % 12) % 12, bass_split)
     p_root_h = _clamp_treble(p_root + 12)
 
-    # Nudge each toward ref_mid
+    TREBLE_HI = 83  # keep final chord settled; p_root_h = p_root+12 <= 83+12=95... cap below
+    # Nudge each toward ref_mid but don't exceed a comfortable ceiling
     for _ in range(4):
-        if p_fifth  < ref_mid - 12: p_fifth  += 12
-        if p_root   < ref_mid - 6:  p_root   += 12
-    p_root_h = p_root + 12
+        if p_fifth < ref_mid - 12 and p_fifth + 12 <= TREBLE_HI: p_fifth += 12
+        if p_root  < ref_mid - 6  and p_root  + 12 <= TREBLE_HI: p_root  += 12
+    p_root_h = p_root + 12  # one octave higher — guaranteed <= TREBLE_HI + 12 = 95... clamp
+    if p_root_h > 91: p_root_h = p_root  # drop high octave if it overshoots
 
     # Ensure ordering: fifth < root < root_high
     notes_treble = sorted({p_fifth, p_root, p_root_h})
@@ -2173,42 +2277,19 @@ def _apply_final_resolution(bar_events_list, chords, key_root, tonic_qual,
     return result
 
 
-# ── Expressive dynamics (phrase arcs + melodic contour) ───────────────
+# ── Expressive dynamics (melodic contour + agogic) ────────────────────
 def _apply_expressive_dynamics(bar_events_list, phrase_bars=4,
                                 section_labels=None, bass_split=58):
     """
-    Adds human phrasing to velocities:
-    1. Phrase arc   — soft start, swell to bar 3, taper at end (sine envelope)
-    2. Contour      — higher treble notes get more velocity (voice-leading tendency)
-    3. Agogic       — longer notes get +1 velocity bin (natural emphasis)
+    Shapes per-note velocities within each bar:
+    1. Contour  — higher treble notes get more velocity (voice-leading tendency)
+    2. Agogic   — longer notes get +1 velocity bin (natural emphasis)
+
+    Phrase arc is applied separately in _apply_phrase_arc, AFTER
+    velocity_differentiation, so the arc isn't undone by the melody boost.
     """
     result = [list(bar) for bar in bar_events_list]
-    n = len(result)
 
-    # ── Phrase arc ────────────────────────────────────────────────────
-    phrase_start = 0
-    while phrase_start < n:
-        phrase_end = min(phrase_start + phrase_bars, n)
-        if section_labels is not None:
-            for j in range(phrase_start + 1, phrase_end):
-                if section_labels[j] != section_labels[phrase_start]:
-                    phrase_end = j
-                    break
-        plen = phrase_end - phrase_start
-        for i in range(phrase_start, phrase_end):
-            t = (i - phrase_start) / max(plen - 1, 1)
-            # Peaks at t≈0.65; dips at 0 and 1.0.
-            # Wide enough (0.80-1.0) to produce a real bin-level change even
-            # at moderate base velocities (e.g. bin 4: 3 at start → 4 at peak).
-            phase = math.sin(t * math.pi * 0.95)
-            envelope = 0.80 + 0.20 * phase
-            result[i] = [
-                (pos, p, d, max(0, min(N_VEL_BINS - 1, int(v * envelope + 0.5))))
-                for pos, p, d, v in result[i]
-            ]
-        phrase_start = phrase_end
-
-    # ── Contour + agogic ──────────────────────────────────────────────
     for i, bar in enumerate(result):
         if not bar:
             continue
@@ -2220,13 +2301,42 @@ def _apply_expressive_dynamics(bar_events_list, phrase_bars=4,
         span     = hi - lo if hi > lo else 1
         new_bar  = list(bar)
         for j, pos, p, d, v in treble:
-            frac          = (p - lo) / span           # 0 = lowest, 1 = highest
+            frac          = (p - lo) / span
             contour_boost = int((frac - 0.33) * 9)    # −3 at bottom, +6 at top
-            agogic_boost  = 1 if d >= 4 else 0        # longer notes = more emphasis
+            agogic_boost  = 1 if d >= 4 else 0
             new_v         = max(0, min(N_VEL_BINS - 1, v + contour_boost + agogic_boost))
             new_bar[j]    = (pos, p, d, new_v)
         result[i] = new_bar
 
+    return result
+
+
+def _apply_phrase_arc(bar_events_list, phrase_bars=4, section_labels=None):
+    """
+    Applies a soft-start / swell / taper envelope across each phrase.
+    Runs AFTER velocity_differentiation so the arc isn't undone by melody boost.
+    Range: 0.72 (phrase start/end) → 1.0 (phrase peak at ~65%).
+    """
+    result = [list(bar) for bar in bar_events_list]
+    n = len(result)
+    phrase_start = 0
+    while phrase_start < n:
+        phrase_end = min(phrase_start + phrase_bars, n)
+        if section_labels is not None:
+            for j in range(phrase_start + 1, phrase_end):
+                if section_labels[j] != section_labels[phrase_start]:
+                    phrase_end = j
+                    break
+        plen = phrase_end - phrase_start
+        for i in range(phrase_start, phrase_end):
+            t = (i - phrase_start) / max(plen - 1, 1)
+            phase = math.sin(t * math.pi * 0.95)
+            envelope = 0.72 + 0.28 * phase   # wider swing: 0.72→1.0 (was 0.80→1.0)
+            result[i] = [
+                (pos, p, d, max(0, min(N_VEL_BINS - 1, int(v * envelope + 0.5))))
+                for pos, p, d, v in result[i]
+            ]
+        phrase_start = phrase_end
     return result
 
 
@@ -2737,6 +2847,27 @@ def main():
             vb = vel_arc_bias(i, args.n_bars, args.vel_arc, device)
             extra_bias = vb if extra_bias is None else extra_bias + vb
 
+        # Cross-bar pitch repetition penalty: penalize pitches that were dominant
+        # in the previous bar to break autoregressive feedback loops.
+        if bar_history and args.pitch_repeat_penalty > 0:
+            prev_tokens = bar_history[-1]
+            pitch_counts: dict = {}
+            for tok in prev_tokens:
+                if NOTE_ON_OFF <= tok < NOTE_ON_OFF + 88:
+                    midi_p = tok - NOTE_ON_OFF + 21
+                    pitch_counts[midi_p] = pitch_counts.get(midi_p, 0) + 1
+            if pitch_counts:
+                total_prev = sum(pitch_counts.values())
+                cb_bias = torch.zeros(NOTE_VOCAB, device=device)
+                for midi_p, cnt in pitch_counts.items():
+                    dominance = cnt / total_prev
+                    if dominance > 0.12:   # only penalize pitches with >12% share
+                        penalty = args.pitch_repeat_penalty * dominance * 1.2
+                        tok_idx = NOTE_ON_OFF + (midi_p - 21)
+                        if 0 <= tok_idx < NOTE_VOCAB:
+                            cb_bias[tok_idx] -= penalty
+                extra_bias = cb_bias if extra_bias is None else extra_bias + cb_bias
+
         # Motif coherence: apply pitch-class bias on all bars once the motif is known.
         # Applying globally (not just A returns) keeps the opening fingerprint as a
         # soft anchor throughout — the primary defence against long-range drift.
@@ -2909,6 +3040,11 @@ def main():
             bar_events_list = _smooth_intra_bar_leaps(
                 bar_events_list, diatonic_roots, bass_split=args.lh_bass_split)
 
+        # ── Break cross-bar top-voice loops (after smoothing so the loop-
+        #    breaker's displacements aren't reversed by the leap smoother) ──
+        bar_events_list = _break_top_voice_loops(
+            bar_events_list, bass_split=args.lh_bass_split)
+
         if getattr(args, 'debug_stages', False):
             bars_to_midi(bar_events_list, bpm=args.bpm).save(args.output + '.stage3_smooth.mid')
 
@@ -2938,6 +3074,12 @@ def main():
         if args.melody_boost > 0 or args.accomp_reduce > 0:
             bar_events_list = _apply_velocity_differentiation(
                 bar_events_list, args.melody_boost, args.accomp_reduce)
+
+        # ── Phrase arc (after melody boost so it isn't undone) ───────────
+        if not args.no_humanize:
+            bar_events_list = _apply_phrase_arc(
+                bar_events_list, phrase_bars=args.phrase_bars,
+                section_labels=section_labels)
 
         # ── Section crossfade (dynamic breath at A→B, B→A transitions) ──
         if args.form != 'none':
