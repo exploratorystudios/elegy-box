@@ -1564,28 +1564,28 @@ def _smooth_melody_leaps(bar_events_list, bass_split=58, max_leap=7, section_lab
     prev_top = None
 
     for bar_idx, events in enumerate(result):
+        # Pre-pass: clamp EVERY treble note above MELODY_HI (not just the top).
+        # A single-top ceiling check misses inner-voice notes that exceed the
+        # ceiling and can later form harsh intervals with displaced top notes.
+        for i, (pos, pitch, dur, vel) in enumerate(result[bar_idx]):
+            if pitch > MELODY_HI:
+                clamped = pitch
+                for delta in (-12, -24):
+                    cand = pitch + delta
+                    if MELODY_LO <= cand <= MELODY_HI:
+                        clamped = cand
+                        break
+                if clamped != pitch:
+                    result[bar_idx][i] = (pos, clamped, dur, vel)
+
         # Build pos → [(event_index, pitch)] for treble notes
         by_pos = {}
-        for i, (pos, pitch, dur, vel) in enumerate(events):
+        for i, (pos, pitch, dur, vel) in enumerate(result[bar_idx]):
             if pitch >= bass_split:
                 by_pos.setdefault(pos, []).append((i, pitch))
 
         for pos in sorted(by_pos):
             top_idx, top_pitch = max(by_pos[pos], key=lambda x: x[1])
-
-            # Hard ceiling: if the melody crept above MELODY_HI in small steps
-            # (each individually within max_leap), clamp it down now.
-            if top_pitch > MELODY_HI:
-                best_pitch = top_pitch
-                for delta in (-12, -24):
-                    cand = top_pitch + delta
-                    if MELODY_LO <= cand <= MELODY_HI:
-                        best_pitch = cand
-                        break
-                if best_pitch != top_pitch:
-                    p_, _, d_, v_ = result[bar_idx][top_idx]
-                    result[bar_idx][top_idx] = (p_, best_pitch, d_, v_)
-                    top_pitch = best_pitch
 
             if prev_top is not None:
                 leap = abs(top_pitch - prev_top)
@@ -1848,7 +1848,7 @@ def _apply_post_climax_breath(bar_events_list, section_labels, bass_split=58,
     return result
 
 
-def _apply_velocity_differentiation(bar_events_list, melody_boost=2, accomp_reduce=1):
+def _apply_velocity_differentiation(bar_events_list, melody_boost=1, accomp_reduce=1):
     """
     At each rhythmic position, identify the highest-pitch note as the melody voice.
     Boost its velocity by melody_boost bins; reduce all lower notes by accomp_reduce.
@@ -1955,74 +1955,80 @@ def vel_arc_bias(bar_idx, n_bars, strength, device):
 # ── Vertical dissonance filter ────────────────────────────────────────
 def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, chords=None, bass_split=58):
     """
-    At each rhythmic position, detect harshly dissonant simultaneous treble
-    intervals (tritone=6, m2=1, M7=11) and remove the note most responsible:
+    Detects harsh intervals (m2=1, tritone=6, M7=11) between ANY two treble
+    notes that overlap in time (not just same-start-position), and removes
+    the less important note from each clashing pair.
 
-    Priority order for removal candidates:
-      1. Non-diatonic note with highest dissonance score  (chromatic accident)
-      2. Diatonic non-chord-tone with highest score       (passing tone in wrong place)
-      3. Shortest diatonic chord-tone if score still high (last resort)
+    Uses actual semitone distance (not pitch class) so compound intervals
+    (compound M7 = 23 st, compound tritone = 18 st) are not flagged.
 
-    Bass notes are never removed. Chord-member tritones (e.g. F#+C in a D7)
-    are intentional and are left intact only when BOTH notes are chord tones.
+    Priority for removal: non-diatonic > diatonic non-chord-tone > shorter note.
+    Bass notes are never removed. Both-chord-tone pairs are left (intentional).
     """
     if not diatonic_pcs:
         return bar_events_list
 
-    HARSH = {1, 6, 11}   # m2, tritone, M7
+    HARSH = {1, 6, 11}  # actual semitone distances: m2, tritone, M7
 
-    def dissonance_score(pc, other_pcs):
-        return sum(1 for o in other_pcs if (abs(pc - o) % 12) in HARSH)
+    def harsh_actual(p1, p2):
+        return abs(p1 - p2) in HARSH
+
+    def overlaps(n1, n2):
+        # n = (pos, pitch, dur, vel); pos/dur in 16th-note slots
+        return n1[0] < n2[0] + n2[2] and n2[0] < n1[0] + n1[2]
 
     result = []
     for bar_idx, bar in enumerate(bar_events_list):
-        from collections import defaultdict
-        # Build chord-tone set for this bar (if chord data supplied)
         chord = chords[bar_idx] if (chords and bar_idx < len(chords)) else None
         if chord is not None:
             chord_ivs = _QUALITY_INTERVALS[chord[1]] if chord[1] < len(_QUALITY_INTERVALS) else [0, 4, 7]
             chord_pcs = {(chord[0] + iv) % 12 for iv in chord_ivs}
         else:
-            chord_pcs = diatonic_pcs  # treat all diatonic as chord tones if unknown
+            # No chord data: treat nothing as a protected chord tone so the
+            # "both chord tones → leave" exception never fires for unknown chords.
+            chord_pcs = set()
 
-        by_pos = defaultdict(list)
-        for note in bar:
-            by_pos[note[0]].append(note)
+        treble = [n for n in bar if n[1] >= bass_split]
 
         remove = set()
-        for pos, notes in by_pos.items():
-            treble = [n for n in notes if n[1] >= bass_split]
-            if len(treble) < 2:
+        for i in range(len(treble)):
+            ni = treble[i]
+            if id(ni) in remove:
                 continue
-            pcs = [n[1] % 12 for n in treble]
-            total = sum(dissonance_score(pcs[i], pcs[:i] + pcs[i+1:])
-                        for i in range(len(pcs)))
-            if total < 2:
-                continue
-
-            def _score(n):
-                return dissonance_score(n[1] % 12, [o[1] % 12 for o in treble if o is not n])
-
-            # Pass 1: remove non-diatonic note with highest dissonance
-            non_dia = [(s, n) for n in treble if (n[1] % 12) not in diatonic_pcs
-                       for s in [_score(n)]]
-            if non_dia:
-                non_dia.sort(key=lambda x: -x[0])
-                if non_dia[0][0] >= 1:
-                    remove.add(id(non_dia[0][1]))
+            for j in range(i + 1, len(treble)):
+                nj = treble[j]
+                if id(nj) in remove:
+                    continue
+                if not overlaps(ni, nj):
+                    continue
+                if not harsh_actual(ni[1], nj[1]):
                     continue
 
-            # Pass 2: remove diatonic non-chord-tone with highest dissonance
-            non_ct = [(s, n) for n in treble if (n[1] % 12) not in chord_pcs
-                      for s in [_score(n)]]
-            if non_ct:
-                non_ct.sort(key=lambda x: -x[0])
-                if non_ct[0][0] >= 1:
-                    remove.add(id(non_ct[0][1]))
+                pi, pj = ni[1] % 12, nj[1] % 12
+                # Both chord tones → intentional harmonic color, leave
+                if pi in chord_pcs and pj in chord_pcs:
                     continue
 
-            # Pass 3 (last resort): both notes are chord tones forming a harsh interval.
-            # This is a harmonic tritone (e.g. F#+C in D7) — intentional, leave it.
+                # Decide which to remove: non-diatonic > non-chord-tone > shorter
+                ni_dia = pi in diatonic_pcs
+                nj_dia = pj in diatonic_pcs
+                ni_ct  = pi in chord_pcs
+                nj_ct  = pj in chord_pcs
+
+                if not ni_dia and nj_dia:
+                    remove.add(id(ni)); break
+                elif not nj_dia and ni_dia:
+                    remove.add(id(nj))
+                elif not ni_ct and nj_ct:
+                    remove.add(id(ni)); break
+                elif not nj_ct and ni_ct:
+                    remove.add(id(nj))
+                else:
+                    # Same harmonic status — remove the shorter (passing) note
+                    if ni[2] <= nj[2]:
+                        remove.add(id(ni)); break
+                    else:
+                        remove.add(id(nj))
 
         result.append([n for n in bar if id(n) not in remove])
     return result
@@ -2191,8 +2197,11 @@ def _apply_expressive_dynamics(bar_events_list, phrase_bars=4,
         plen = phrase_end - phrase_start
         for i in range(phrase_start, phrase_end):
             t = (i - phrase_start) / max(plen - 1, 1)
-            # Peaks at t≈0.65; dips at 0 and 1.0
-            envelope = 0.88 + 0.12 * math.sin(t * math.pi * 0.95)
+            # Peaks at t≈0.65; dips at 0 and 1.0.
+            # Wide enough (0.80-1.0) to produce a real bin-level change even
+            # at moderate base velocities (e.g. bin 4: 3 at start → 4 at peak).
+            phase = math.sin(t * math.pi * 0.95)
+            envelope = 0.80 + 0.20 * phase
             result[i] = [
                 (pos, p, d, max(0, min(N_VEL_BINS - 1, int(v * envelope + 0.5))))
                 for pos, p, d, v in result[i]
@@ -2214,7 +2223,7 @@ def _apply_expressive_dynamics(bar_events_list, phrase_bars=4,
             frac          = (p - lo) / span           # 0 = lowest, 1 = highest
             contour_boost = int((frac - 0.33) * 9)    # −3 at bottom, +6 at top
             agogic_boost  = 1 if d >= 4 else 0        # longer notes = more emphasis
-            new_v         = max(0, min(N_VEL_BINS - 2, v + contour_boost + agogic_boost))
+            new_v         = max(0, min(N_VEL_BINS - 1, v + contour_boost + agogic_boost))
             new_bar[j]    = (pos, p, d, new_v)
         result[i] = new_bar
 
@@ -2416,7 +2425,7 @@ def main():
                              'bar_temp is scaled by max(1-decay*progress, 0.75) so later '
                              'bars are more focused and less likely to drift.')
     # ── Velocity differentiation ──────────────────────────────────────
-    parser.add_argument('--melody_boost',   type=int, default=2,
+    parser.add_argument('--melody_boost',   type=int, default=1,
                         help='Velocity bins added to melody (highest) note at each position')
     parser.add_argument('--accomp_reduce',  type=int, default=1,
                         help='Velocity bins subtracted from non-melody notes at each position')
