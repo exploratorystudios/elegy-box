@@ -1554,23 +1554,16 @@ def _smooth_melody_leaps(bar_events_list, bass_split=58, max_leap=7, section_lab
     to find a register that cuts the interval.  The pitch class is unchanged,
     so harmony is preserved.  Inner voices are untouched.
 
-    prev_top resets at section boundaries (A→B, B→A, etc.) so that intended
-    register contrasts between sections are not silently smoothed away.
+    prev_top is NOT reset at section boundaries so the smoother bridges the
+    gap between sections — the first note of B is pulled toward where A ended.
     """
     MELODY_LO = bass_split    # never push melody below the treble boundary
     MELODY_HI = 91            # ~G6, a comfortable piano melody ceiling
 
     result = [list(bar) for bar in bar_events_list]
     prev_top = None
-    prev_section = None
 
     for bar_idx, events in enumerate(result):
-        # Reset at section boundaries — don't smooth across A→B or B→A transitions
-        if section_labels is not None:
-            curr_section = section_labels[bar_idx] if bar_idx < len(section_labels) else 'A'
-            if curr_section != prev_section:
-                prev_top = None
-            prev_section = curr_section
         # Build pos → [(event_index, pitch)] for treble notes
         by_pos = {}
         for i, (pos, pitch, dur, vel) in enumerate(events):
@@ -1880,6 +1873,50 @@ def _apply_velocity_differentiation(bar_events_list, melody_boost=2, accomp_redu
                     new_vel = max(vel - accomp_reduce, 0)
                 new_events.append((p2, pitch, dur, new_vel))
         result.append(new_events)
+    return result
+
+
+def _apply_section_crossfade(bar_events_list, section_labels, fade_bars=2,
+                             out_floor=0.82, in_floor=0.82):
+    """
+    At each section boundary, apply a brief dynamic breath:
+      - Last fade_bars of the outgoing section fade from 1.0 → out_floor
+      - First fade_bars of the incoming section ramp from in_floor → 1.0
+    This signals the transition intentionally rather than masking it,
+    matching what live performers do at section changes.
+    """
+    if not section_labels:
+        return bar_events_list
+
+    n = len(bar_events_list)
+    scale = [1.0] * n
+
+    # Walk through and mark bars around each section boundary
+    for i in range(1, n):
+        if section_labels[i] != section_labels[i - 1]:
+            # Fade out: bars leading up to the boundary
+            for k in range(fade_bars):
+                bar = i - 1 - k
+                if bar >= 0 and section_labels[bar] == section_labels[i - 1]:
+                    t = k / fade_bars          # 0 at boundary, 1 at fade_bars out
+                    scale[bar] = min(scale[bar], 1.0 - (1.0 - out_floor) * (1.0 - t))
+            # Fade in: bars just after the boundary
+            for k in range(fade_bars):
+                bar = i + k
+                if bar < n and section_labels[bar] == section_labels[i]:
+                    t = k / fade_bars          # 0 at boundary, 1 at fade_bars in
+                    scale[bar] = min(scale[bar], in_floor + (1.0 - in_floor) * t)
+
+    result = []
+    for i, events in enumerate(bar_events_list):
+        s = scale[i]
+        if s >= 1.0:
+            result.append(events)
+        else:
+            result.append([
+                (pos, p, d, max(0, min(N_VEL_BINS - 1, int(v * s + 0.5))))
+                for pos, p, d, v in events
+            ])
     return result
 
 
@@ -2842,6 +2879,14 @@ def main():
         if getattr(args, 'debug_stages', False):
             bars_to_midi(bar_events_list, bpm=args.bpm).save(args.output + '.stage1_thin.mid')
 
+        # ── Polish: collapse repetitive runs in all voices ────────────────
+        bar_events_list = _polish_top_voice(
+            bar_events_list, bass_split=args.lh_bass_split)
+        bar_events_list = _collapse_bass_runs(
+            bar_events_list, bass_split=args.lh_bass_split)
+        bar_events_list = _collapse_inner_voice_runs(
+            bar_events_list, bass_split=args.lh_bass_split)
+
         if getattr(args, 'debug_stages', False):
             bars_to_midi(bar_events_list, bpm=args.bpm).save(args.output + '.stage2_polish.mid')
 
@@ -2884,6 +2929,11 @@ def main():
         if args.melody_boost > 0 or args.accomp_reduce > 0:
             bar_events_list = _apply_velocity_differentiation(
                 bar_events_list, args.melody_boost, args.accomp_reduce)
+
+        # ── Section crossfade (dynamic breath at A→B, B→A transitions) ──
+        if args.form != 'none':
+            bar_events_list = _apply_section_crossfade(
+                bar_events_list, section_labels)
 
         # ── Post-climax breath ────────────────────────────────────────────
         bar_events_list = _apply_post_climax_breath(
