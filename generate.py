@@ -1359,8 +1359,11 @@ def _truncate_cross_chord_sustains(bar_events_list, chords, bass_split=58):
             if chord_pcs and p % 12 not in chord_pcs:
                 result[bar_idx - 1][j] = (pos, p, max(1, 16 - pos), v)
                 continue
-            # Condition 2: m2 clash with any treble note in the next bar
-            if any(abs(p - p2) == 1 and p2 >= bass_split
+            # Condition 2: m2 clash with a note that actually overlaps the carry
+            # in bar N+1 space. The carry extends carry_end slots into bar N+1,
+            # so only notes starting before carry_end would actually clash.
+            carry_end = pos + d - 16  # slots carry extends into next bar
+            if any(abs(p - p2) == 1 and pos2 < carry_end and p2 >= bass_split
                    for pos2, p2, d2, v2 in next_bar):
                 result[bar_idx - 1][j] = (pos, p, max(1, 16 - pos), v)
     return result
