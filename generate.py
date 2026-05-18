@@ -2040,16 +2040,15 @@ def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, chords=None, bass
     """
     Detects harsh intervals (m2=1, tritone=6, M7=11) between ANY two treble
     notes that overlap in time (not just same-start-position), and removes
-    the less important note from each clashing pair.
-
-    Uses actual semitone distance (not pitch class) so compound intervals
-    (compound M7 = 23 st, compound tritone = 18 st) are not flagged.
+    the less important note from each clashing pair. Uses pitch-class distance
+    (mod 12) so compound intervals (18st tritone, 23st M7, 13st m2) are caught.
 
     Priority for removal: non-diatonic > diatonic non-chord-tone > shorter note.
-    Bass notes are never removed. Both-chord-tone pairs are left (intentional).
+    Bass notes are never removed. Both-chord-tone pairs are left (intentional
+    harmony — e.g. the B–F tritone of a G7 chord must not be stripped).
+    Runs unconditionally; falls back to chord-tone-only protection when the
+    diatonic key is unknown.
     """
-    if not diatonic_pcs:
-        return bar_events_list
 
     HARSH = {1, 6, 11}  # pitch-class intervals: m2, tritone, M7
 
@@ -2102,7 +2101,10 @@ def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, chords=None, bass
                 return id(ni) if can_remove_ni else None
             elif not nj_ct and ni_ct:
                 return id(nj) if can_remove_nj else None
+            elif ni_ct and nj_ct:
+                return None  # both chord tones → intentional harmony, leave it
             else:
+                # Neither diatonic nor chord-tone context — remove shorter note
                 if ni[2] < nj[2]:
                     return id(ni) if can_remove_ni else id(nj) if can_remove_nj else None
                 elif nj[2] < ni[2]:
@@ -3136,10 +3138,9 @@ def main():
             section_labels=section_labels)
 
         # ── Vertical dissonance filter ────────────────────────────────────
-        if diatonic_roots is not None:
-            bar_events_list = _reduce_vertical_dissonance(
-                bar_events_list, diatonic_roots, chords=chords,
-                bass_split=args.lh_bass_split)
+        bar_events_list = _reduce_vertical_dissonance(
+            bar_events_list, diatonic_roots or set(), chords=chords,
+            bass_split=args.lh_bass_split)
 
         # ── Chromatic clash filter ────────────────────────────────────────
         if diatonic_roots is not None:
