@@ -2103,8 +2103,12 @@ def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, chords=None, bass
                 return id(nj) if can_remove_nj else None
             elif ni_ct and nj_ct:
                 return None  # both chord tones → intentional harmony, leave it
+            elif not diatonic_pcs:
+                # No key context: can't distinguish wrong notes from passing tones.
+                # Leave the pair alone to preserve texture richness.
+                return None
             else:
-                # Neither diatonic nor chord-tone context — remove shorter note
+                # Both notes are diatonic but neither is a chord tone — remove shorter
                 if ni[2] < nj[2]:
                     return id(ni) if can_remove_ni else id(nj) if can_remove_nj else None
                 elif nj[2] < ni[2]:
@@ -2125,7 +2129,13 @@ def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, chords=None, bass
                 if not overlaps(ni, nc): continue
                 if not harsh_actual(ni[1], nc[1]): continue
                 pi = ni[1] % 12
-                if pi not in diatonic_pcs:
+                # Only remove if we have key context AND the note is non-diatonic,
+                # or if the carry is a chord tone and this note is not.
+                nc_ct = nc[1] % 12 in chord_pcs
+                ni_ct_local = pi in chord_pcs
+                if diatonic_pcs and pi not in diatonic_pcs:
+                    remove.add(id(ni)); break
+                elif nc_ct and not ni_ct_local:
                     remove.add(id(ni)); break
                 # diatonic current-bar note vs carry — leave it alone
 
