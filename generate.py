@@ -2051,10 +2051,10 @@ def _reduce_vertical_dissonance(bar_events_list, diatonic_pcs, chords=None, bass
     if not diatonic_pcs:
         return bar_events_list
 
-    HARSH = {1, 6, 11}  # actual semitone distances: m2, tritone, M7
+    HARSH = {1, 6, 11}  # pitch-class intervals: m2, tritone, M7
 
     def harsh_actual(p1, p2):
-        return abs(p1 - p2) in HARSH
+        return abs(p1 - p2) % 12 in HARSH
 
     def overlaps(n1, n2):
         # n = (pos, pitch, dur, vel); pos/dur in 16th-note slots
@@ -2167,6 +2167,44 @@ def _soften_chromatic_clashes(bar_events_list, diatonic_pcs, bass_split=58):
                     v = max(0, v - 3)              # audibly soften
             new_bar.append((pos, p, d, v))
         result.append(new_bar)
+    return result
+
+
+def _strip_harsh_clashes(bar_events_list, bass_split=58):
+    """
+    Unconditional safety pass: remove same-bar tritone (6st) and M7 (11st)
+    clashes between treble notes that overlap in slot space (pitch-class check,
+    so compound intervals like 18st and 23st are also caught). Removes the
+    shorter note of each clashing pair; ties broken by removing the lower pitch.
+    Runs even when key/chord context is unavailable.
+    """
+    HARSH_PC = {6, 11}  # tritone, M7 by pitch class (m2 handled by _strip_m2_clashes)
+    result = []
+    for bar in bar_events_list:
+        treble = [n for n in bar if n[1] >= bass_split]
+        remove = set()
+        for i in range(len(treble)):
+            ni = treble[i]
+            if id(ni) in remove:
+                continue
+            for j in range(i + 1, len(treble)):
+                nj = treble[j]
+                if id(nj) in remove:
+                    continue
+                if abs(ni[1] - nj[1]) % 12 not in HARSH_PC:
+                    continue
+                if ni[0] >= nj[0] + nj[2] or nj[0] >= ni[0] + ni[2]:
+                    continue  # no slot overlap
+                # Remove the shorter note; ties broken by lower pitch
+                if ni[2] < nj[2]:
+                    remove.add(id(ni)); break
+                elif nj[2] < ni[2]:
+                    remove.add(id(nj))
+                elif ni[1] < nj[1]:
+                    remove.add(id(ni)); break
+                else:
+                    remove.add(id(nj))
+        result.append([n for n in bar if id(n) not in remove])
     return result
 
 
