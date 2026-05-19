@@ -1359,11 +1359,10 @@ def _truncate_cross_chord_sustains(bar_events_list, chords, bass_split=58):
             if chord_pcs and p % 12 not in chord_pcs:
                 result[bar_idx - 1][j] = (pos, p, max(1, 16 - pos), v)
                 continue
-            # Condition 2: m2 clash with a note that actually overlaps the carry
-            # in bar N+1 space. The carry extends carry_end slots into bar N+1,
-            # so only notes starting before carry_end would actually clash.
-            carry_end = pos + d - 16  # slots carry extends into next bar
-            if any(abs(p - p2) == 1 and pos2 < carry_end and p2 >= bass_split
+            # Condition 2: m2 clash at the bar seam — notes starting within 2 slots
+            # of bar N+1 beat 1 create an audible "greeting clash"; longer delays
+            # are subordinate and don't warrant cutting the sustain short.
+            if any(abs(p - p2) == 1 and pos2 <= 2 and p2 >= bass_split
                    for pos2, p2, d2, v2 in next_bar):
                 result[bar_idx - 1][j] = (pos, p, max(1, 16 - pos), v)
     return result
@@ -2226,8 +2225,9 @@ def _strip_harsh_clashes(bar_events_list, bass_split=58):
 def _strip_m2_clashes(bar_events_list, bass_split=58):
     """
     Final safety pass: remove any remaining same-bar m2 semitone clashes between
-    treble notes that overlap in slot space. Removes the lower-pitched note of each
-    clashing pair (higher pitch = melody tone wins). No key knowledge needed.
+    treble notes that overlap in slot space. Only removes notes with dur==1 (a single
+    16th-note flash) — longer notes are plausibly intentional passing tones, chromatic
+    lines, or suspensions and should be left to _reduce_vertical_dissonance's judgment.
     """
     result = []
     for bar in bar_events_list:
@@ -2245,11 +2245,14 @@ def _strip_m2_clashes(bar_events_list, bass_split=58):
                     continue
                 if ni[0] >= nj[0] + nj[2] or nj[0] >= ni[0] + ni[2]:
                     continue  # no slot overlap
-                # Remove the lower pitch; if one is much longer, keep it
-                if ni[2] > nj[2] * 2:
-                    remove.add(id(nj))
-                elif nj[2] > ni[2] * 2:
+                # Only act if at least one note is a dur=1 flash (model accident)
+                if ni[2] != 1 and nj[2] != 1:
+                    continue
+                # Remove the shorter note; ties broken by lower pitch
+                if ni[2] < nj[2]:
                     remove.add(id(ni)); break
+                elif nj[2] < ni[2]:
+                    remove.add(id(nj))
                 elif ni[1] < nj[1]:
                     remove.add(id(ni)); break
                 else:
@@ -2789,7 +2792,7 @@ def main():
 
     # Motif heuristic state
     MOTIF_BARS    = 2       # collect pitch classes from first N bars of first A section
-    ANCHOR_BARS   = 4       # opening bars pinned permanently in BarEncoder memory (≤ MAX_HISTORY)
+    ANCHOR_BARS   = 6       # opening bars pinned permanently in BarEncoder memory (≤ MAX_HISTORY)
     motif_pitches = []      # raw pitches gathered during first A block
     motif_bias    = None    # built once we leave the first A section
     first_a_done  = False   # True after first A block ends
